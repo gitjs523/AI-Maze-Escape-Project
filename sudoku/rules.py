@@ -27,3 +27,12 @@ def find_conflicts(grid):
 def is_complete(grid):
     """모든 칸이 채워져 있고 규칙 위반이 없으면 True (= 퍼즐을 풀었다)."""
     return all(v != 0 for row in grid for v in row) and not find_conflicts(grid)
+
+
+def peers(r, c):
+    """(r, c)와 같은 행·열·3x3 구역에 있는 다른 칸들의 집합."""
+    cells = {(r, i) for i in range(9)} | {(i, c) for i in range(9)}
+    br, bc = r // 3 * 3, c // 3 * 3
+    cells |= {(br + i, bc + j) for i in range(3) for j in range(3)}
+    cells.discard((r, c))
+    return cells

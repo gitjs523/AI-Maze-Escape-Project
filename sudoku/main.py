@@ -1,9 +1,8 @@
-"""스도쿠 - 4단계: 보드, 숫자 입력, 중복 표시, 완료 판정, 다시 시작 (고정 퍼즐)."""
+"""스도쿠 - 보드, 숫자 입력, 메모, 중복 표시, 완료 판정, 다시 시작 (고정 퍼즐)."""
 import tkinter as tk
-
 from tkinter import messagebox
 
-from rules import find_conflicts, is_complete
+from rules import find_conflicts, is_complete, peers
 
 CELL = 56          # 칸 한 변(px)
 MARGIN = 20        # 보드 바깥 여백
@@ -34,21 +33,39 @@ class SudokuApp:
         self.canvas = tk.Canvas(root, width=size, height=size, bg="white", highlightthickness=0)
         self.canvas.pack()
 
-        tk.Button(root, text="다시 시작", font=("맑은 고딕", 11), command=self.restart).pack(pady=(0, 12))
+        bar = tk.Frame(root, bg="white")
+        bar.pack(pady=(0, 12))
+        self.memo_btn = tk.Button(bar, font=("맑은 고딕", 11), width=15, command=self.toggle_memo)
+        self.memo_btn.pack(side="left", padx=6)
+        tk.Button(bar, text="다시 시작", font=("맑은 고딕", 11), width=10, command=self.restart).pack(side="left", padx=6)
 
         self.grid = [row[:] for row in PUZZLE]
         # 처음부터 있던 숫자(문제 숫자)는 수정할 수 없다
         self.fixed = [[v != 0 for v in row] for row in PUZZLE]
         self.sel = None  # 선택된 칸 (행, 열) 또는 None
+        self.memo = [[set() for _ in range(9)] for _ in range(9)]  # 칸마다 후보 숫자 메모
+        self.memo_mode = False
 
         self.canvas.bind("<Button-1>", self.on_click)
         root.bind("<Key>", self.on_key)
+        self.update_memo_button()
         self.draw()
 
     def restart(self):
         self.grid = [row[:] for row in PUZZLE]
+        self.memo = [[set() for _ in range(9)] for _ in range(9)]
         self.sel = None
         self.draw()
+
+    def toggle_memo(self):
+        self.memo_mode = not self.memo_mode
+        self.update_memo_button()
+
+    def update_memo_button(self):
+        if self.memo_mode:
+            self.memo_btn.config(text="메모: 켜짐 (M)", bg="#ffd666", activebackground="#ffd666")
+        else:
+            self.memo_btn.config(text="메모: 꺼짐 (M)", bg="#f0f0f0", activebackground="#f0f0f0")
 
     def check_done(self):
         if is_complete(self.grid):
@@ -65,19 +82,43 @@ class SudokuApp:
         self.draw()
 
     def on_key(self, event):
+        if event.char in ("m", "M"):  # M 키: 메모 모드 켜기/끄기 (칸 선택 없이도 동작)
+            self.toggle_memo()
+            return
         if self.sel is None:
             return
         r, c = self.sel
+        entered = False  # 이번 키로 칸의 숫자가 바뀌었는지
         if event.keysym in ("Up", "Down", "Left", "Right"):
             dr, dc = {"Up": (-1, 0), "Down": (1, 0), "Left": (0, -1), "Right": (0, 1)}[event.keysym]
             self.sel = (min(8, max(0, r + dr)), min(8, max(0, c + dc)))
         elif not self.fixed[r][c]:
-            if event.char in "123456789" and event.char != "":
-                self.grid[r][c] = int(event.char)
-            elif event.keysym in ("BackSpace", "Delete", "0"):
-                self.grid[r][c] = 0
+            is_digit = event.char != "" and event.char in "123456789"
+            is_erase = event.keysym in ("BackSpace", "Delete", "0")
+            if self.memo_mode:
+                # 메모 모드: 비어 있는 칸에만 후보 숫자를 켜고 끈다
+                if is_digit and self.grid[r][c] == 0:
+                    d = int(event.char)
+                    self.memo[r][c] ^= {d}
+                elif is_erase:
+                    self.memo[r][c].clear()
+            else:
+                if is_digit:
+                    d = int(event.char)
+                    self.grid[r][c] = d
+                    self.memo[r][c].clear()
+                    # 같은 줄·열·구역의 같은 숫자 메모는 자동으로 지운다
+                    for pr, pc in peers(r, c):
+                        self.memo[pr][pc].discard(d)
+                    entered = True
+                elif is_erase:
+                    if self.grid[r][c]:
+                        self.grid[r][c] = 0
+                    else:
+                        self.memo[r][c].clear()
         self.draw()
-        self.check_done()
+        if entered:
+            self.check_done()
 
     # ---- 그리기 ----
     def draw(self):
@@ -119,6 +160,15 @@ class SudokuApp:
                         fill="#d02020" if (r, col) in conflicts
                         else "#1b1b1b" if self.fixed[r][col] else "#1a5fd0",
                     )
+                else:
+                    # 빈 칸의 메모: 숫자 d를 3x3 위치(1=왼쪽 위 ... 9=오른쪽 아래)에 작게 쓴다
+                    for d in self.memo[r][col]:
+                        sub = CELL // 3
+                        c.create_text(
+                            MARGIN + col * CELL + ((d - 1) % 3) * sub + sub // 2,
+                            MARGIN + r * CELL + ((d - 1) // 3) * sub + sub // 2,
+                            text=str(d), font=("맑은 고딕", 10), fill="#5b6b82",
+                        )
 
 
 def main():
