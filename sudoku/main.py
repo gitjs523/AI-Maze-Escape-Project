@@ -1,4 +1,4 @@
-"""스도쿠 - 1단계: 9x9 보드 화면 (고정 퍼즐 표시)."""
+"""스도쿠 - 2단계: 9x9 보드, 칸 선택과 숫자 입력 (고정 퍼즐)."""
 import tkinter as tk
 
 CELL = 56          # 칸 한 변(px)
@@ -30,8 +30,39 @@ class SudokuApp:
         self.canvas.pack()
 
         self.grid = [row[:] for row in PUZZLE]
+        # 처음부터 있던 숫자(문제 숫자)는 수정할 수 없다
+        self.fixed = [[v != 0 for v in row] for row in PUZZLE]
+        self.sel = None  # 선택된 칸 (행, 열) 또는 None
+
+        self.canvas.bind("<Button-1>", self.on_click)
+        root.bind("<Key>", self.on_key)
         self.draw()
 
+    # ---- 입력 처리 ----
+    def on_click(self, event):
+        col = (event.x - MARGIN) // CELL
+        row = (event.y - MARGIN) // CELL
+        if 0 <= row < 9 and 0 <= col < 9:
+            self.sel = (row, col)
+        else:
+            self.sel = None  # 보드 바깥을 누르면 선택 해제
+        self.draw()
+
+    def on_key(self, event):
+        if self.sel is None:
+            return
+        r, c = self.sel
+        if event.keysym in ("Up", "Down", "Left", "Right"):
+            dr, dc = {"Up": (-1, 0), "Down": (1, 0), "Left": (0, -1), "Right": (0, 1)}[event.keysym]
+            self.sel = (min(8, max(0, r + dr)), min(8, max(0, c + dc)))
+        elif not self.fixed[r][c]:
+            if event.char in "123456789" and event.char != "":
+                self.grid[r][c] = int(event.char)
+            elif event.keysym in ("BackSpace", "Delete", "0"):
+                self.grid[r][c] = 0
+        self.draw()
+
+    # ---- 그리기 ----
     def draw(self):
         c = self.canvas
         c.delete("all")
@@ -42,6 +73,11 @@ class SudokuApp:
                     x0 = MARGIN + bc * CELL * 3
                     y0 = MARGIN + br * CELL * 3
                     c.create_rectangle(x0, y0, x0 + CELL * 3, y0 + CELL * 3, fill="#eef3fa", outline="")
+        # 선택된 칸 강조
+        if self.sel is not None:
+            sr, sc = self.sel
+            x0, y0 = MARGIN + sc * CELL, MARGIN + sr * CELL
+            c.create_rectangle(x0, y0, x0 + CELL, y0 + CELL, fill="#ffe9a8", outline="")
         # 선: 3칸마다 굵게
         for i in range(10):
             w = 3 if i % 3 == 0 else 1
@@ -56,7 +92,9 @@ class SudokuApp:
                     c.create_text(
                         MARGIN + col * CELL + CELL // 2,
                         MARGIN + r * CELL + CELL // 2,
-                        text=str(v), font=("맑은 고딕", 22, "bold"), fill="#1b1b1b",
+                        text=str(v), font=("맑은 고딕", 22, "bold"),
+                        # 문제 숫자는 검정, 내가 넣은 숫자는 파랑
+                        fill="#1b1b1b" if self.fixed[r][col] else "#1a5fd0",
                     )
 
 
