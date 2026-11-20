@@ -1,5 +1,7 @@
-"""스도쿠 - 2단계: 9x9 보드, 칸 선택과 숫자 입력 (고정 퍼즐)."""
+"""스도쿠 - 3단계: 9x9 보드, 칸 선택과 숫자 입력, 중복 표시 (고정 퍼즐)."""
 import tkinter as tk
+
+from rules import find_conflicts
 
 CELL = 56          # 칸 한 변(px)
 MARGIN = 20        # 보드 바깥 여백
@@ -73,6 +75,11 @@ class SudokuApp:
                     x0 = MARGIN + bc * CELL * 3
                     y0 = MARGIN + br * CELL * 3
                     c.create_rectangle(x0, y0, x0 + CELL * 3, y0 + CELL * 3, fill="#eef3fa", outline="")
+        # 규칙 위반(같은 행·열·구역에 중복)인 칸은 옅은 빨강으로 칠한다
+        conflicts = find_conflicts(self.grid)
+        for r, col in conflicts:
+            x0, y0 = MARGIN + col * CELL, MARGIN + r * CELL
+            c.create_rectangle(x0, y0, x0 + CELL, y0 + CELL, fill="#fbd5d5", outline="")
         # 선택된 칸 강조
         if self.sel is not None:
             sr, sc = self.sel
@@ -93,8 +100,9 @@ class SudokuApp:
                         MARGIN + col * CELL + CELL // 2,
                         MARGIN + r * CELL + CELL // 2,
                         text=str(v), font=("맑은 고딕", 22, "bold"),
-                        # 문제 숫자는 검정, 내가 넣은 숫자는 파랑
-                        fill="#1b1b1b" if self.fixed[r][col] else "#1a5fd0",
+                        # 중복은 빨강, 문제 숫자는 검정, 내가 넣은 숫자는 파랑
+                        fill="#d02020" if (r, col) in conflicts
+                        else "#1b1b1b" if self.fixed[r][col] else "#1a5fd0",
                     )
 
 
