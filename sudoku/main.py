@@ -1,7 +1,9 @@
-"""스도쿠 - 3단계: 9x9 보드, 칸 선택과 숫자 입력, 중복 표시 (고정 퍼즐)."""
+"""스도쿠 - 4단계: 보드, 숫자 입력, 중복 표시, 완료 판정, 다시 시작 (고정 퍼즐)."""
 import tkinter as tk
 
-from rules import find_conflicts
+from tkinter import messagebox
+
+from rules import find_conflicts, is_complete
 
 CELL = 56          # 칸 한 변(px)
 MARGIN = 20        # 보드 바깥 여백
@@ -26,10 +28,13 @@ class SudokuApp:
         self.root = root
         root.title("스도쿠")
         root.resizable(False, False)
+        root.configure(bg="white")
 
         size = BOARD + MARGIN * 2
         self.canvas = tk.Canvas(root, width=size, height=size, bg="white", highlightthickness=0)
         self.canvas.pack()
+
+        tk.Button(root, text="다시 시작", font=("맑은 고딕", 11), command=self.restart).pack(pady=(0, 12))
 
         self.grid = [row[:] for row in PUZZLE]
         # 처음부터 있던 숫자(문제 숫자)는 수정할 수 없다
@@ -39,6 +44,15 @@ class SudokuApp:
         self.canvas.bind("<Button-1>", self.on_click)
         root.bind("<Key>", self.on_key)
         self.draw()
+
+    def restart(self):
+        self.grid = [row[:] for row in PUZZLE]
+        self.sel = None
+        self.draw()
+
+    def check_done(self):
+        if is_complete(self.grid):
+            messagebox.showinfo("스도쿠", "축하합니다! 퍼즐을 모두 풀었어요.")
 
     # ---- 입력 처리 ----
     def on_click(self, event):
@@ -63,6 +77,7 @@ class SudokuApp:
             elif event.keysym in ("BackSpace", "Delete", "0"):
                 self.grid[r][c] = 0
         self.draw()
+        self.check_done()
 
     # ---- 그리기 ----
     def draw(self):

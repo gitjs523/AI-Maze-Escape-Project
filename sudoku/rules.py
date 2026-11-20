@@ -22,3 +22,8 @@ def find_conflicts(grid):
             if len(same) > 1:
                 conflicts.update(same)
     return conflicts
+
+
+def is_complete(grid):
+    """모든 칸이 채워져 있고 규칙 위반이 없으면 True (= 퍼즐을 풀었다)."""
+    return all(v != 0 for row in grid for v in row) and not find_conflicts(grid)
