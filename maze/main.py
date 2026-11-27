@@ -116,7 +116,8 @@ class Game:
         return any(c.pos == self.player.pos for c in self.chasers)
 
     def update(self, dt, held_dir):
-        """dt초 진행. held_dir은 지금 누르고 있는 방향 (없으면 None)."""
+        """dt초 진행. held_dir은 이동을 시도할 방향 하나 또는 우선순위 목록 (없으면 None)."""
+        self.last_move_dir = None
         if self.state != "play":
             return
         self.elapsed += dt
@@ -125,17 +126,28 @@ class Game:
 
         # 플레이어 이동
         self.player_timer = max(0.0, self.player_timer - dt)
-        if held_dir and self.player_timer <= 0:
-            nxt = (self.player.pos[0] + held_dir[0], self.player.pos[1] + held_dir[1])
-            if is_floor(self.grid, nxt):
+        if self.player_timer <= 0:
+            # 우선순위 순서대로 갈 수 있는 첫 방향으로 이동 (막힌 방향은 건너뜀)
+            if held_dir is None:
+                dirs = []
+            elif isinstance(held_dir[0], int):
+                dirs = [held_dir]
+            else:
+                dirs = held_dir
+            for d in dirs:
+                nxt = (self.player.pos[0] + d[0], self.player.pos[1] + d[1])
+                if not is_floor(self.grid, nxt):
+                    continue
                 self.player.move_to(nxt)
                 self.player_timer = PLAYER_STEP
+                self.last_move_dir = d
                 if self.player.pos == self.exit:
                     self.state = "clear"
                     return
                 if self.caught():
                     self.finish_caught()
                     return
+                break
 
         # 추격자 이동 (출발 대기 후, 매 칸마다 A*로 최단 경로를 다시 계산)
         self.grace = max(0.0, self.grace - dt)
@@ -226,13 +238,40 @@ class View:
         self.screen.blit(dim, (0, 0))
 
 
-def held_direction(order):
-    """누르고 있는 방향키 중 가장 최근에 누른 것."""
-    keys = pygame.key.get_pressed()
-    for k in reversed(order):
-        if keys[k]:
-            return KEY_DIRS[k]
-    return None
+class InputBuffer:
+    """방향 입력 보관. 모퉁이 직전에 미리 누른 방향을 잠깐 기억했다가 갈 수 있게 되면 꺾는다."""
+
+    TTL = 0.3  # 미리 누른 방향을 기억하는 시간(초)
+
+    def __init__(self):
+        self.order = []      # 방향키를 누른 순서
+        self.queued = None   # 아직 못 쓴, 가장 최근에 누른 방향
+        self.age = 0.0
+
+    def keydown(self, key):
+        self.order = [k for k in self.order if k != key] + [key]
+        self.queued = KEY_DIRS[key]
+        self.age = 0.0
+
+    def tick(self, dt):
+        self.age += dt
+        if self.age > self.TTL:
+            self.queued = None
+
+    def candidates(self, pressed):
+        """이동을 시도할 방향들 (우선순위 순): 미리 누른 방향 → 누르고 있는 키(최근 순)."""
+        dirs = []
+        if self.queued:
+            dirs.append(self.queued)
+        for k in reversed(self.order):
+            if pressed[k] and KEY_DIRS[k] not in dirs:
+                dirs.append(KEY_DIRS[k])
+        return dirs
+
+    def moved(self, d):
+        """실제로 d 방향으로 움직였으면 미리 누른 입력은 사용된 것."""
+        if d is not None and d == self.queued:
+            self.queued = None
 
 
 def main():
@@ -242,7 +281,7 @@ def main():
     clock = pygame.time.Clock()
     view = View(screen)
     game = Game()
-    order = []  # 방향키 누른 순서
+    buf = InputBuffer()
     running = True
     while running:
         dt = min(clock.tick(60) / 1000.0, 0.1)
@@ -253,7 +292,7 @@ def main():
                 if e.key == pygame.K_ESCAPE:
                     running = False
                 elif e.key in KEY_DIRS:
-                    order = [k for k in order if k != e.key] + [e.key]
+                    buf.keydown(e.key)
                 elif e.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_r):
                     if game.state == "title" and e.key != pygame.K_r:
                         game.state = "play"
@@ -261,7 +300,9 @@ def main():
                         game.next_stage()
                     elif game.state == "over":
                         game.restart()
-        game.update(dt, held_direction(order))
+        buf.tick(dt)
+        game.update(dt, buf.candidates(pygame.key.get_pressed()))
+        buf.moved(game.last_move_dir)
         view.draw(game)
         pygame.display.flip()
     pygame.quit()

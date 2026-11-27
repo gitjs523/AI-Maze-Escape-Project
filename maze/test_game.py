@@ -5,7 +5,8 @@ import sys
 
 os.environ["SDL_VIDEODRIVER"] = "dummy"
 sys.path.insert(0, os.path.dirname(__file__))
-from main import Game, stage_params, PLAYER_STEP, GRACE
+from main import Game, stage_params, PLAYER_STEP, GRACE, InputBuffer, KEY_DIRS
+import pygame
 from logic import astar, safe_path_exists, shortest_routes_safe
 
 
@@ -85,6 +86,72 @@ def test_safe_path_detects_blocked_corridor():
     g = [[1] * 12, [1] + [0] * 10 + [1], [1] * 12]
     assert safe_path_exists(g, (1, 1), (10, 1), [(5, 1)], 0.11, 0.3, 2.0) is False
     assert safe_path_exists(g, (1, 1), (10, 1), [(10, 1)], 0.11, 0.3, 2.0) is False
+
+
+def make_corridor_game():
+    """ㄱ자 복도: (1,1)에서 오른쪽으로 가다 (4,1)에서 아래로 꺾는다."""
+    g = Game(random.Random(0))
+    g.state = "play"
+    g.grid = [[1] * 7, [1, 0, 0, 0, 0, 1, 1], [1, 1, 1, 1, 0, 1, 1], [1, 1, 1, 1, 0, 1, 1], [1] * 7]
+    g.player.pos = g.player.prev = (1, 1)
+    g.chasers = []
+    g.exit = (4, 3)
+    g.grace = 99
+    g.player_timer = 0.0
+    return g
+
+
+RIGHT, DOWN = KEY_DIRS[pygame.K_RIGHT], KEY_DIRS[pygame.K_DOWN]
+
+
+def test_blocked_turn_key_does_not_stop_player():
+    """오른쪽으로 가는 중 아래 키를 미리 눌러도(아직 벽) 멈추지 않고 직진해야 한다."""
+    g = make_corridor_game()
+    g.update(0.2, [DOWN, RIGHT])
+    assert g.player.pos == (2, 1), g.player.pos
+
+
+def test_early_turn_is_remembered_and_executed_at_junction():
+    g = make_corridor_game()
+    buf = InputBuffer()
+    held = {pygame.K_RIGHT: True, pygame.K_DOWN: False}
+    buf.keydown(pygame.K_RIGHT)
+    positions = []
+    for i in range(40):
+        if i == 12:  # 모퉁이보다 이른 시점(아직 아래는 벽)에 아래 키를 누르고 계속 누름
+            buf.keydown(pygame.K_DOWN)
+            held[pygame.K_DOWN] = True
+        buf.tick(1 / 60)
+        g.update(1 / 60, buf.candidates(held))
+        buf.moved(g.last_move_dir)
+        positions.append(g.player.pos)
+        if g.state != "play":
+            break
+    assert g.state == "clear", positions[-1]
+
+
+def test_tapped_turn_before_junction_is_not_lost():
+    """모퉁이 직전에 아래 키를 톡 치고 바로 떼도 모퉁이에서 한 칸 꺾여야 한다."""
+    g = make_corridor_game()
+    buf = InputBuffer()
+    held = {pygame.K_RIGHT: True, pygame.K_DOWN: False}
+    buf.keydown(pygame.K_RIGHT)
+    turned = False
+    for i in range(40):
+        if i == 12:
+            buf.keydown(pygame.K_DOWN)  # 눌렀다가 바로 뗌 (held는 False 그대로)
+        buf.tick(1 / 60)
+        g.update(1 / 60, buf.candidates(held))
+        buf.moved(g.last_move_dir)
+        turned = turned or g.player.pos == (4, 2)
+    assert turned
+
+
+def test_buffered_turn_expires():
+    buf = InputBuffer()
+    buf.keydown(pygame.K_DOWN)
+    buf.tick(0.35)
+    assert buf.queued is None
 
 
 def test_restart_resets():
