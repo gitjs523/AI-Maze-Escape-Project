@@ -5,7 +5,7 @@ import sys
 
 os.environ["SDL_VIDEODRIVER"] = "dummy"
 sys.path.insert(0, os.path.dirname(__file__))
-from main import (Game, stage_params, PLAYER_STEP, GRACE, InputBuffer, KEY_DIRS,
+from main import (Game, stage_params, PLAYER_STEP, GRACE, InputBuffer, KEY_DIRS, FINAL_STAGE, REF_PLAYER_STEP,
                   HUMAN_STEP, HUMAN_DELAY, slack_window)
 import pygame
 from logic import bfs_distances, route_nodes, astar, safe_path_exists, shortest_routes_safe, route_slack, chaser_slack_map, generate_maze, farthest_floor
@@ -224,6 +224,40 @@ def test_buffered_turn_expires():
     assert buf.queued is None
 
 
+def test_chaser_speed_scales_with_player_speed():
+    """추격자는 플레이어보다 항상 일정 비율 이상 느려야 한다 (플레이어를 늦춰도 따돌릴 수 있는 정도 유지)."""
+    for stage in (1, 5, 9, 15):
+        ratio = stage_params(stage)[3] / PLAYER_STEP
+        ref = max(0.15, 0.30 - 0.02 * (stage - 1)) / REF_PLAYER_STEP
+        assert abs(ratio - ref) < 1e-9, (stage, ratio, ref)
+    assert stage_params(FINAL_STAGE)[3] / PLAYER_STEP >= 1.3
+
+
+def test_final_stage_ends_game_and_counts_total_time():
+    g = Game(random.Random(2))
+    g.state = "play"
+    g.stage = FINAL_STAGE - 1
+    g.start_stage()
+    # 출구 바로 옆에 두고 한 칸 이동시켜 클리어
+    g.chasers = []
+    path = astar(g.grid, g.player.pos, g.exit)
+    g.player.pos = g.player.prev = path[-2]
+    g.elapsed = 12.5
+    g.update(0.01, (path[-1][0] - path[-2][0], path[-1][1] - path[-2][1]))
+    assert g.state == "clear" and abs(g.total_time - 12.51) < 1e-6
+    g.next_stage()
+    assert g.stage == FINAL_STAGE
+    g.chasers = []
+    path = astar(g.grid, g.player.pos, g.exit)
+    g.player.pos = g.player.prev = path[-2]
+    g.elapsed = 20.0
+    g.update(0.01, (path[-1][0] - path[-2][0], path[-1][1] - path[-2][1]))
+    assert g.state == "win", g.state
+    assert abs(g.total_time - (12.51 + 20.01)) < 1e-6
+    g.restart()
+    assert g.stage == 1 and g.state == "play" and g.total_time == 0.0
+
+
 def test_restart_resets():
     g = Game(random.Random(3))
     g.stage = 5
@@ -232,7 +266,7 @@ def test_restart_resets():
 
 
 def test_stage_params_grow_and_cap():
-    assert stage_params(1)[3] > stage_params(6)[3] >= 0.15
+    assert stage_params(1)[3] > stage_params(6)[3]
     assert stage_params(99)[0] <= 28 and stage_params(99)[1] <= 18
     assert stage_params(1)[2] == 1 and stage_params(4)[2] == 2
 

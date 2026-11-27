@@ -22,6 +22,8 @@ TEXT_C = (235, 238, 245)
 
 PLAYER_STEP = 0.13  # 플레이어가 한 칸 가는 시간(초). 시험 중: 이전 값 0.11(9.1칸/초) → 0.13(7.7칸/초)
 GRACE = 2.0         # 단계 시작 후 추격자가 출발하기까지 (초)
+FINAL_STAGE = 10    # 마지막 단계. 이 단계를 깨면 전체 클리어
+REF_PLAYER_STEP = 0.11  # 추격자 속도표를 만들 때 기준으로 삼은 플레이어 속도 (아래 stage_params 참고)
 
 # 보통 사람 기준: 판을 보고 정하느라 1.5초 뒤에 움직이기 시작하고, 플레이어 최대 속도보다 조금 느리게(칸당 0.15초) 간다.
 # 추격자 배치는 이 사람이 최단 경로로 가도 잡히지 않는 여유(초)를 단계별로 정해서 맞춘다.
@@ -47,7 +49,9 @@ def stage_params(stage):
     cw = min(8 + 2 * (stage - 1), 28)
     ch = min(6 + (stage - 1), 18)
     chasers = 1 if stage < 4 else 2
-    step = max(0.15, 0.30 - 0.02 * (stage - 1))
+    # 추격자 속도는 플레이어 속도에 비례시킨다: 플레이어를 늦추거나 빠르게 해도
+    # '추격자가 플레이어보다 몇 배 느린가'(따돌릴 수 있는 정도)는 그대로 유지된다.
+    step = max(0.15, 0.30 - 0.02 * (stage - 1)) * PLAYER_STEP / REF_PLAYER_STEP
     return cw, ch, chasers, step
 
 
@@ -75,7 +79,8 @@ class Game:
     def __init__(self, rng=None):
         self.rng = rng or random.Random()
         self.stage = 1
-        self.state = "title"  # title / play / clear / over
+        self.total_time = 0.0  # 지금까지 깬 단계들에 걸린 시간 합계
+        self.state = "title"  # title / play / clear / win / over
         self.start_stage()
 
     def start_stage(self):
@@ -131,6 +136,7 @@ class Game:
 
     def restart(self):
         self.stage = 1
+        self.total_time = 0.0
         self.start_stage()
         self.state = "play"
 
@@ -164,7 +170,8 @@ class Game:
                 self.player_timer = PLAYER_STEP
                 self.last_move_dir = d
                 if self.player.pos == self.exit:
-                    self.state = "clear"
+                    self.total_time += self.elapsed
+                    self.state = "win" if self.stage >= FINAL_STAGE else "clear"
                     return
                 if self.caught():
                     self.finish_caught()
@@ -233,7 +240,7 @@ class View:
 
         # 상단 정보줄
         pygame.draw.rect(s, (12, 14, 20), (0, 0, WIN_W, HUD_H))
-        self.text(self.font, f"단계 {g.stage}", TEXT_C, (70, HUD_H // 2))
+        self.text(self.font, f"단계 {g.stage}/{FINAL_STAGE}", TEXT_C, (90, HUD_H // 2))
         self.text(self.font, f"{g.elapsed:5.1f}초", TEXT_C, (WIN_W - 70, HUD_H // 2))
         if g.state == "play":
             msg = f"추격자 출발까지 {g.grace:.1f}초" if g.grace > 0 else "도망쳐!"
@@ -244,11 +251,18 @@ class View:
             self.text(self.big, "AI 추격 미로 탈출", TEXT_C, (WIN_W // 2, 260))
             self.text(self.mid, "방향키로 이동해 초록색 출구까지 도망치세요", TEXT_C, (WIN_W // 2, 360))
             self.text(self.mid, "빨간 추격자는 벽을 돌아 최단 경로로 쫓아옵니다", CHASER_C, (WIN_W // 2, 405))
-            self.text(self.font, "Enter 또는 스페이스: 시작", PATH_C, (WIN_W // 2, 500))
+            self.text(self.font, f"총 {FINAL_STAGE}단계 — 끝까지 탈출해 보세요", TEXT_C, (WIN_W // 2, 455))
+            self.text(self.font, "Enter 또는 스페이스: 시작", PATH_C, (WIN_W // 2, 520))
         elif g.state == "clear":
             self.overlay()
             self.text(self.big, f"단계 {g.stage} 탈출 성공!", EXIT_C, (WIN_W // 2, 300))
             self.text(self.font, "Enter: 다음 단계", TEXT_C, (WIN_W // 2, 400))
+        elif g.state == "win":
+            self.overlay()
+            self.text(self.big, "전체 탈출 성공!", EXIT_C, (WIN_W // 2, 280))
+            self.text(self.mid, f"{FINAL_STAGE}개 단계를 모두 통과했습니다", TEXT_C, (WIN_W // 2, 365))
+            self.text(self.mid, f"총 걸린 시간  {g.total_time:.1f}초", PATH_C, (WIN_W // 2, 415))
+            self.text(self.font, "Enter 또는 스페이스: 처음부터 다시", TEXT_C, (WIN_W // 2, 500))
         elif g.state == "over":
             self.text(self.big, "잡혔다!", CHASER_C, (WIN_W // 2, 300))
             self.text(self.font, f"{g.stage}단계에서 종료  |  주황색 선: 추격자가 따라온 길", TEXT_C, (WIN_W // 2, 370))
@@ -320,7 +334,7 @@ def main():
                         game.state = "play"
                     elif game.state == "clear" and e.key != pygame.K_r:
                         game.next_stage()
-                    elif game.state == "over":
+                    elif game.state in ("over", "win"):
                         game.restart()
         buf.tick(dt)
         game.update(dt, buf.candidates(pygame.key.get_pressed()))
