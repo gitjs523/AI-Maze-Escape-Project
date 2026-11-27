@@ -6,7 +6,7 @@ import sys
 import pygame
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from logic import astar, bfs_distances, farthest_floor, generate_maze, is_floor, safe_path_exists, shortest_routes_safe
+from logic import astar, bfs_distances, chaser_slack_map, farthest_floor, generate_maze, is_floor
 
 WIN_W, WIN_H = 960, 720
 HUD_H = 48
@@ -22,6 +22,17 @@ TEXT_C = (235, 238, 245)
 
 PLAYER_STEP = 0.11  # 플레이어가 한 칸 가는 시간(초)
 GRACE = 2.0         # 단계 시작 후 추격자가 출발하기까지 (초)
+
+# 보통 사람 기준: 판을 보고 정하느라 1.5초 뒤에 움직이기 시작하고, 칸당 0.14초로 간다.
+# 추격자 배치는 이 사람이 최단 경로로 가도 잡히지 않는 여유(초)를 단계별로 정해서 맞춘다.
+HUMAN_DELAY = 1.5
+HUMAN_STEP = 0.14
+
+
+def slack_window(stage):
+    """단계별 여유 시간 범위(초): 초반은 넉넉하게, 단계가 오를수록 빠듯하게 (최소 0.5초 여유는 유지)."""
+    lo = max(0.5, 2.5 - 0.25 * (stage - 1))
+    return lo, lo + 2.0
 
 KEY_DIRS = {
     pygame.K_RIGHT: (1, 0), pygame.K_d: (1, 0),
@@ -68,32 +79,28 @@ class Game:
         self.start_stage()
 
     def start_stage(self):
-        """미로와 추격자 위치를 만든다. 잘 달리면 반드시 클리어할 수 있는 판만 통과시킨다."""
+        """미로와 추격자 위치를 만든다. 보통 사람이 최단 경로로 가도 잡히지 않되,
+        단계가 오를수록 여유가 줄어들도록 추격자를 '여유 시간 범위'에 맞는 칸에 놓는다."""
         cw, ch, n_chasers, self.chaser_step = stage_params(self.stage)
+        lo, hi = slack_window(self.stage)
         start = (1, 1)
         picks = []
+        fallback = None
         for _ in range(60):  # 판 자체를 다시 만드는 횟수
             self.grid = generate_maze(cw, ch, self.rng)
             self.exit = farthest_floor(self.grid, start)
-            dist = bfs_distances(self.grid, start)
-            far = max(dist.values())
-            solution = set(astar(self.grid, start, self.exit))
-            # 시작점과 출구 사이 어딘가, 정답 길 위가 아닌 곳에서 출발
-            spots = [p for p in dist if p not in solution and 0.3 * far <= dist[p] <= 0.9 * far]
-            if len(spots) < n_chasers:
-                continue
-            for _ in range(40):  # 같은 미로에서 추격자 위치를 다시 뽑는 횟수
-                picks = self.rng.sample(spots, n_chasers)
-                args = (self.grid, start, self.exit, picks, PLAYER_STEP, self.chaser_step, GRACE)
-                # 눈에 띄는 최단 경로로 가도 안전하고, 안전한 길도 있어야 통과
-                if shortest_routes_safe(*args) and safe_path_exists(*args):
-                    break
-            else:
-                continue
-            break
-        if len(picks) != n_chasers:  # 거의 없는 경우의 대비책: 출구에서 먼 칸 중에서 고름
-            far_tiles = sorted((p for p in dist if p not in solution), key=lambda p: -dist[p])
-            picks = far_tiles[:n_chasers]
+            slack, route = chaser_slack_map(self.grid, start, self.exit, HUMAN_STEP,
+                                            self.chaser_step, GRACE, HUMAN_DELAY)
+            off_route = [p for p in slack if p not in route]
+            spots = [p for p in off_route if lo <= slack[p] <= hi]
+            picks = self.pick_spread(spots, n_chasers)
+            if picks:
+                break
+            if fallback is None:  # 범위에 맞는 칸이 없을 때를 대비해 여유가 충분한 칸을 기억
+                safe_enough = [p for p in off_route if slack[p] >= lo]
+                fallback = self.pick_spread(safe_enough, n_chasers)
+        if not picks:
+            picks = fallback or sorted(off_route, key=lambda p: -slack[p])[:n_chasers]
         self.player = Mover(start)
         self.chasers = [Mover(p) for p in picks]
         self.player_timer = 0.0
@@ -101,6 +108,17 @@ class Game:
         self.grace = GRACE
         self.elapsed = 0.0
         self.death_paths = []
+
+    def pick_spread(self, spots, n):
+        """spots에서 서로 6칸 이상 떨어진 n곳을 무작위로 고른다 (없으면 빈 목록)."""
+        if len(spots) < n:
+            return []
+        for _ in range(30):
+            picks = self.rng.sample(spots, n)
+            if all(abs(a[0] - b[0]) + abs(a[1] - b[1]) >= 6
+                   for i, a in enumerate(picks) for b in picks[i + 1:]):
+                return picks
+        return []
 
     def next_stage(self):
         self.stage += 1

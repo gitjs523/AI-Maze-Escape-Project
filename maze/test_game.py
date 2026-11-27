@@ -5,9 +5,10 @@ import sys
 
 os.environ["SDL_VIDEODRIVER"] = "dummy"
 sys.path.insert(0, os.path.dirname(__file__))
-from main import Game, stage_params, PLAYER_STEP, GRACE, InputBuffer, KEY_DIRS
+from main import (Game, stage_params, PLAYER_STEP, GRACE, InputBuffer, KEY_DIRS,
+                  HUMAN_STEP, HUMAN_DELAY, slack_window)
 import pygame
-from logic import astar, safe_path_exists, shortest_routes_safe
+from logic import astar, safe_path_exists, shortest_routes_safe, route_slack, chaser_slack_map, generate_maze, farthest_floor
 
 
 def run(game, policy, limit=120.0, dt=1 / 60):
@@ -64,21 +65,57 @@ def test_runner_reaches_exit_or_is_caught_and_stage_advances():
     assert cleared > 0
 
 
-def test_every_stage_is_fair():
-    """1~10단계, 여러 판 모두에서 추격자보다 먼저 도착하는 안전한 길이 있어야 한다."""
-    bad = 0
+def slack_of(g):
+    return route_slack(g.grid, (1, 1), g.exit, [c.pos for c in g.chasers],
+                       HUMAN_STEP, g.chaser_step, GRACE, HUMAN_DELAY)
+
+
+def test_every_stage_is_fair_for_a_normal_human():
+    """1~10단계 모두: 1.5초 뒤 출발, 칸당 0.14초로 최단 경로로 가는 사람이 잡히지 않는다(여유 >= 단계별 하한)."""
+    too_tight = 0
     total = 0
     for stage in range(1, 11):
-        for seed in range(60):
-            g = Game(random.Random(seed * 7 + stage))
+        lo, hi = slack_window(stage)
+        for seed in range(40):
+            g = Game(random.Random(seed * 5 + stage))
             g.stage = stage
             g.start_stage()
             total += 1
-            args = (g.grid, (1, 1), g.exit, [c.pos for c in g.chasers], PLAYER_STEP, g.chaser_step, GRACE)
-            if not (safe_path_exists(*args) and shortest_routes_safe(*args)):
-                bad += 1
-    print(f"  (불공평한 판 {bad}/{total})")
-    assert bad == 0
+            if slack_of(g) < lo - 1e-9:
+                too_tight += 1
+    print(f"  (사람 기준으로 빠듯한 판 {too_tight}/{total})")
+    assert too_tight == 0
+
+
+def test_slack_map_matches_brute_force():
+    rng = random.Random(7)
+    for _ in range(25):
+        g = generate_maze(rng.randint(5, 14), rng.randint(5, 10), rng)
+        ex = farthest_floor(g, (1, 1))
+        cs = rng.choice([0.3, 0.22, 0.16])
+        smap, route = chaser_slack_map(g, (1, 1), ex, HUMAN_STEP, cs, GRACE, HUMAN_DELAY)
+        off = [p for p in smap if p not in route]
+        for p in rng.sample(off, min(4, len(off))):
+            brute = route_slack(g, (1, 1), ex, [p], HUMAN_STEP, cs, GRACE, HUMAN_DELAY)
+            assert abs(smap[p] - brute) < 1e-9, (p, smap[p], brute)
+
+
+def test_difficulty_ramps_with_stage():
+    """단계가 오를수록 사람 기준 여유가 줄어든다 (너무 쉬운 판이 후반에 나오지 않는다)."""
+    import statistics
+    med = {}
+    for stage in (1, 4, 7, 10):
+        vals = []
+        for seed in range(30):
+            g = Game(random.Random(seed))
+            g.stage = stage
+            g.start_stage()
+            vals.append(slack_of(g))
+        med[stage] = statistics.median(vals)
+        lo, hi = slack_window(stage)
+        assert max(vals) <= hi + 1e-9 + 1.0, (stage, max(vals), hi)  # 대비책이 쓰였을 때만 약간 넘을 수 있음
+    print("  (여유 중앙값: " + ", ".join(f"{k}단계 {v:.1f}초" for k, v in med.items()) + ")")
+    assert med[1] > med[4] > med[7] >= med[10] - 0.3
 
 
 def test_safe_path_detects_blocked_corridor():

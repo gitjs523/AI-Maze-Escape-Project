@@ -174,3 +174,53 @@ def shortest_routes_safe(grid, start, goal, chaser_positions, player_step, chase
             if not t + margin * chaser_step < grace + (d.get(node, 1 << 30) - 1) * chaser_step:
                 return False
     return True
+
+
+def route_nodes(grid, start, goal):
+    """출구까지의 최단 경로 위에 있는 모든 칸 {좌표: 시작점에서의 걸음 수}."""
+    d_start = bfs_distances(grid, start)
+    d_goal = bfs_distances(grid, goal)
+    total = d_start[goal]
+    return {n: s for n, s in d_start.items() if s + d_goal[n] == total}
+
+
+def chaser_slack_map(grid, start, goal, human_step, chaser_step, grace, delay):
+    """추격자가 각 칸에서 출발할 때의 '여유 시간(초)'을 한 번에 계산한다.
+
+    플레이어는 delay초 뒤부터 칸당 human_step초로 최단 경로를 가고, 추격자는 grace초 뒤 출발해
+    칸당 chaser_step초로 쫓는다고 본다. 여유 = (추격자가 경로의 어떤 칸에 도착하는 시각)과
+    (플레이어가 그 칸을 지나는 시각)의 차이 중 가장 작은 값. 클수록 플레이어에게 유리하고,
+    0 미만이면 길목에서 잡힐 수 있다.
+
+    경로의 각 칸을 시작점으로 하는 다중 출발 다익스트라 한 번으로 모든 칸의 값을 구한다.
+    """
+    import heapq
+
+    route = route_nodes(grid, start, goal)
+    best = {n: grace - chaser_step - delay - s * human_step for n, s in route.items()}
+    heap = [(v, n) for n, v in best.items()]
+    heapq.heapify(heap)
+    while heap:
+        v, cur = heapq.heappop(heap)
+        if v > best[cur]:
+            continue
+        for nxt in neighbors(grid, cur):
+            nv = v + chaser_step
+            if nv < best.get(nxt, 1e18):
+                best[nxt] = nv
+                heapq.heappush(heap, (nv, nxt))
+    return best, route
+
+
+def route_slack(grid, start, goal, chaser_positions, human_step, chaser_step, grace, delay):
+    """chaser_slack_map과 같은 값을 칸마다 직접 BFS로 계산한다 (검증용). 경로 위에 서 있으면 -1e9."""
+    route = route_nodes(grid, start, goal)
+    if any(c in route for c in chaser_positions):
+        return -1e9
+    dists = [bfs_distances(grid, c) for c in chaser_positions]
+    worst = 1e18
+    for node, steps in route.items():
+        t = delay + steps * human_step
+        for d in dists:
+            worst = min(worst, grace + (d.get(node, 1 << 30) - 1) * chaser_step - t)
+    return worst
