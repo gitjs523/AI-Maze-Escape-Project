@@ -26,6 +26,8 @@ PLAYER_STEP = 0.13  # 플레이어가 한 칸 가는 시간(초). 시험 중: �
 GRACE = 2.0         # 단계 시작 후 추격자가 출발하기까지 (초)
 FINAL_STAGE = 10    # 마지막 단계. 이 단계를 깨면 전체 클리어
 SPEED_TIME = 4.0    # 속도 증가 아이템 효과 시간(초)
+FREEZE_TIME = 3.0   # 추격자 멈춤 아이템 효과 시간(초)
+ITEM_TIME = {"speed": SPEED_TIME, "freeze": FREEZE_TIME, "power": 5.0}  # 종류별 효과 시간
 SPEED_FACTOR = 0.6  # 속도 증가 중 칸당 시간 배율 (작을수록 빠름)
 REF_PLAYER_STEP = 0.11  # 추격자 속도표를 만들 때 기준으로 삼은 플레이어 속도 (아래 stage_params 참고)
 
@@ -37,7 +39,10 @@ HUMAN_STEP = 0.15
 
 def item_kinds(stage):
     """단계별로 미로에 놓이는 아이템 종류. (아이템은 도움만 되므로 난이도 설계의 공평성 계산에는 영향이 없다.)"""
-    return ["speed"]
+    kinds = ["speed"]
+    if stage >= 2:
+        kinds.append("freeze")
+    return kinds
 
 
 def slack_window(stage):
@@ -171,7 +176,7 @@ class Game:
         for it in list(self.items):
             if it.pos == self.player.pos:
                 self.items.remove(it)
-                self.effects[it.kind] = SPEED_TIME if it.kind == "speed" else self.effects[it.kind]
+                self.effects[it.kind] = ITEM_TIME[it.kind]
 
     def caught(self):
         return any(c.pos == self.player.pos for c in self.chasers)
@@ -216,7 +221,7 @@ class Game:
 
         # 추격자 이동 (출발 대기 후, 매 칸마다 A*로 최단 경로를 다시 계산)
         self.grace = max(0.0, self.grace - dt)
-        if self.grace > 0:
+        if self.grace > 0 or self.effects["freeze"] > 0:  # 출발 전이거나 멈춤 아이템 효과 중이면 제자리
             return
         self.chaser_timer -= dt
         while self.chaser_timer <= 0:
@@ -273,8 +278,9 @@ class View:
                     pygame.draw.lines(s, PATH_C, False, [center(p) for p in path], max(2, ts // 6))
 
         r = ts * 0.36
+        frozen = g.effects["freeze"] > 0
         for c in g.chasers:
-            pygame.draw.circle(s, CHASER_C, center(c.draw_pos()), r)
+            pygame.draw.circle(s, ITEM_C["freeze"] if frozen else CHASER_C, center(c.draw_pos()), r)
         if g.effects["speed"] > 0:  # 속도 증가 중: 플레이어 둘레에 노란 고리
             pygame.draw.circle(s, ITEM_C["speed"], center(g.player.draw_pos()), r + max(2, ts // 6), max(2, ts // 8))
         pygame.draw.circle(s, PLAYER_C, center(g.player.draw_pos()), r)

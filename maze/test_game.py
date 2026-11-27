@@ -6,7 +6,7 @@ import sys
 os.environ["SDL_VIDEODRIVER"] = "dummy"
 sys.path.insert(0, os.path.dirname(__file__))
 from main import (Game, stage_params, PLAYER_STEP, GRACE, InputBuffer, KEY_DIRS, FINAL_STAGE, REF_PLAYER_STEP,
-                  HUMAN_STEP, HUMAN_DELAY, slack_window, Item, SPEED_TIME, SPEED_FACTOR, item_kinds)
+                  HUMAN_STEP, HUMAN_DELAY, slack_window, Item, SPEED_TIME, SPEED_FACTOR, item_kinds, FREEZE_TIME, ITEM_TIME)
 import pygame
 from logic import place_items, distances_from, bfs_distances, route_nodes, astar, safe_path_exists, shortest_routes_safe, route_slack, chaser_slack_map, generate_maze, farthest_floor
 
@@ -294,6 +294,29 @@ def test_speed_item_picked_up_speeds_player_and_expires():
     for _ in range(int(SPEED_TIME * 60) + 5):
         g.update(1 / 60, None)
     assert g.effects["speed"] == 0.0 and abs(g.player_step() - PLAYER_STEP) < 1e-9
+
+
+def test_freeze_item_stops_chasers_then_they_resume():
+    g = Game(random.Random(1))
+    g.state = "play"
+    g.grace = 0.0
+    g.effects["freeze"] = FREEZE_TIME
+    before = [c.pos for c in g.chasers]
+    for _ in range(int((FREEZE_TIME - 0.3) * 60)):
+        g.update(1 / 60, None)
+    assert [c.pos for c in g.chasers] == before, "멈춤 중인데 추격자가 움직였다"
+    for _ in range(int(2.0 * 60)):  # 효과가 끝난 뒤 다시 쫓아와야 한다
+        g.update(1 / 60, None)
+    assert [c.pos for c in g.chasers] != before or g.state == "over"
+
+
+def test_freeze_item_picked_up_sets_effect_and_stage_items():
+    g = make_corridor_game()
+    g.effects = {"speed": 0.0, "freeze": 0.0, "power": 0.0}
+    g.items = [Item("freeze", (2, 1))]
+    g.update(0.01, RIGHT)
+    assert g.items == [] and g.effects["freeze"] > FREEZE_TIME - 0.1
+    assert item_kinds(1) == ["speed"] and "freeze" in item_kinds(2) and "freeze" in item_kinds(10)
 
 
 def test_place_items_helper_basic():
