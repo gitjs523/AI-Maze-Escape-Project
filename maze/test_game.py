@@ -6,9 +6,9 @@ import sys
 os.environ["SDL_VIDEODRIVER"] = "dummy"
 sys.path.insert(0, os.path.dirname(__file__))
 from main import (Game, stage_params, PLAYER_STEP, GRACE, InputBuffer, KEY_DIRS, FINAL_STAGE, REF_PLAYER_STEP,
-                  HUMAN_STEP, HUMAN_DELAY, slack_window)
+                  HUMAN_STEP, HUMAN_DELAY, slack_window, Item, SPEED_TIME, SPEED_FACTOR, item_kinds)
 import pygame
-from logic import bfs_distances, route_nodes, astar, safe_path_exists, shortest_routes_safe, route_slack, chaser_slack_map, generate_maze, farthest_floor
+from logic import place_items, distances_from, bfs_distances, route_nodes, astar, safe_path_exists, shortest_routes_safe, route_slack, chaser_slack_map, generate_maze, farthest_floor
 
 
 def run(game, policy, limit=120.0, dt=1 / 60):
@@ -256,6 +256,53 @@ def test_final_stage_ends_game_and_counts_total_time():
     assert abs(g.total_time - (12.51 + 20.01)) < 1e-6
     g.restart()
     assert g.stage == 1 and g.state == "play" and g.total_time == 0.0
+
+
+def test_items_are_placed_on_valid_off_route_tiles():
+    for stage in (1, 3, 6, 10):
+        for seed in range(25):
+            g = Game(random.Random(seed * 11 + stage))
+            g.stage = stage
+            g.start_stage()
+            kinds = item_kinds(stage)
+            assert sorted(i.kind for i in g.items) == sorted(kinds), (stage, seed)
+            route = set(route_nodes(g.grid, (1, 1), g.exit))
+            off = distances_from(g.grid, route)
+            taken = [(1, 1), g.exit] + [c.pos for c in g.chasers]
+            for it in g.items:
+                assert g.grid[it.pos[1]][it.pos[0]] == 0          # 길 위
+                assert it.pos not in taken and it.pos not in route  # 시작·출구·추격자·최단 경로와 안 겹침
+                assert off[it.pos] >= 1                             # 돌아가야 먹을 수 있음
+            assert len({i.pos for i in g.items}) == len(g.items)    # 서로 겹치지 않음
+
+
+def test_speed_item_picked_up_speeds_player_and_expires():
+    g = make_corridor_game()
+    g.effects = {"speed": 0.0, "freeze": 0.0, "power": 0.0}
+    g.items = [Item("speed", (2, 1))]
+    assert abs(g.player_step() - PLAYER_STEP) < 1e-9
+    g.update(0.01, RIGHT)
+    assert g.player.pos == (2, 1) and g.items == []
+    assert g.effects["speed"] > SPEED_TIME - 0.1
+    assert abs(g.player_step() - PLAYER_STEP * SPEED_FACTOR) < 1e-9
+    # 속도 증가 중에는 같은 시간에 더 많이 이동
+    g2 = make_corridor_game()
+    g2.effects = {"speed": 0.0, "freeze": 0.0, "power": 0.0}
+    g.update(PLAYER_STEP * SPEED_FACTOR + 0.001, RIGHT)
+    assert g.player.pos == (3, 1)                        # 짧아진 간격만에 한 칸 더 이동
+    # 시간이 지나면 원래 속도
+    for _ in range(int(SPEED_TIME * 60) + 5):
+        g.update(1 / 60, None)
+    assert g.effects["speed"] == 0.0 and abs(g.player_step() - PLAYER_STEP) < 1e-9
+
+
+def test_place_items_helper_basic():
+    g = generate_maze(10, 8, random.Random(3))
+    ex = farthest_floor(g, (1, 1))
+    route = set(route_nodes(g, (1, 1), ex))
+    picks = place_items(g, route, {(1, 1), ex}, ["speed", "freeze", "power"], random.Random(1))
+    assert len(picks) == 3
+    assert all(p not in route for _, p in picks)
 
 
 def test_restart_resets():

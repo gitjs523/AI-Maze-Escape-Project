@@ -6,7 +6,8 @@ import sys
 import pygame
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from logic import astar, bfs_distances, chaser_slack_map, farthest_floor, generate_maze, is_floor
+from logic import (astar, bfs_distances, chaser_slack_map, farthest_floor, generate_maze, is_floor,
+                   place_items)
 
 WIN_W, WIN_H = 960, 720
 HUD_H = 48
@@ -19,16 +20,24 @@ CHASER_C = (255, 90, 90)
 EXIT_C = (90, 230, 130)
 PATH_C = (255, 180, 80)
 TEXT_C = (235, 238, 245)
+ITEM_C = {"speed": (255, 220, 70), "freeze": (120, 230, 255), "power": (200, 120, 255)}
 
 PLAYER_STEP = 0.13  # 플레이어가 한 칸 가는 시간(초). 시험 중: 이전 값 0.11(9.1칸/초) → 0.13(7.7칸/초)
 GRACE = 2.0         # 단계 시작 후 추격자가 출발하기까지 (초)
 FINAL_STAGE = 10    # 마지막 단계. 이 단계를 깨면 전체 클리어
+SPEED_TIME = 4.0    # 속도 증가 아이템 효과 시간(초)
+SPEED_FACTOR = 0.6  # 속도 증가 중 칸당 시간 배율 (작을수록 빠름)
 REF_PLAYER_STEP = 0.11  # 추격자 속도표를 만들 때 기준으로 삼은 플레이어 속도 (아래 stage_params 참고)
 
 # 보통 사람 기준: 판을 보고 정하느라 1.5초 뒤에 움직이기 시작하고, 플레이어 최대 속도보다 조금 느리게(칸당 0.15초) 간다.
 # 추격자 배치는 이 사람이 최단 경로로 가도 잡히지 않는 여유(초)를 단계별로 정해서 맞춘다.
 HUMAN_DELAY = 1.5
 HUMAN_STEP = 0.15
+
+
+def item_kinds(stage):
+    """단계별로 미로에 놓이는 아이템 종류. (아이템은 도움만 되므로 난이도 설계의 공평성 계산에는 영향이 없다.)"""
+    return ["speed"]
 
 
 def slack_window(stage):
@@ -73,6 +82,14 @@ class Mover:
                 self.prev[1] + (self.pos[1] - self.prev[1]) * self.t)
 
 
+class Item:
+    """미로 위에 놓인 아이템. kind: speed(속도 증가) / freeze(추격자 멈춤) / power(추격자 처치)"""
+
+    def __init__(self, kind, pos):
+        self.kind = kind
+        self.pos = pos
+
+
 class Game:
     """게임 상태와 규칙. 화면이 없어도 update()로 돌릴 수 있다 (테스트용)."""
 
@@ -109,6 +126,11 @@ class Game:
             picks = fallback or sorted(off_route, key=lambda p: -slack[p])[:n_chasers]
         self.player = Mover(start)
         self.chasers = [Mover(p) for p in picks]
+        route_tiles = set(route)
+        blocked = set(picks) | {start, self.exit}
+        self.items = [Item(k, p) for k, p in
+                      place_items(self.grid, route_tiles, blocked, item_kinds(self.stage), self.rng)]
+        self.effects = {"speed": 0.0, "freeze": 0.0, "power": 0.0}  # 남은 효과 시간(초)
         self.player_timer = 0.0
         self.chaser_timer = 0.0
         self.grace = GRACE
@@ -140,6 +162,17 @@ class Game:
         self.start_stage()
         self.state = "play"
 
+    def player_step(self):
+        """지금 플레이어가 한 칸 가는 데 걸리는 시간 (속도 증가 중이면 짧아진다)."""
+        return PLAYER_STEP * (SPEED_FACTOR if self.effects["speed"] > 0 else 1.0)
+
+    def pickup(self):
+        """플레이어가 서 있는 칸에 아이템이 있으면 먹고 효과를 켠다."""
+        for it in list(self.items):
+            if it.pos == self.player.pos:
+                self.items.remove(it)
+                self.effects[it.kind] = SPEED_TIME if it.kind == "speed" else self.effects[it.kind]
+
     def caught(self):
         return any(c.pos == self.player.pos for c in self.chasers)
 
@@ -149,8 +182,10 @@ class Game:
         if self.state != "play":
             return
         self.elapsed += dt
+        for k in self.effects:
+            self.effects[k] = max(0.0, self.effects[k] - dt)
         for m in [self.player, *self.chasers]:
-            m.t = min(1.0, m.t + dt / (PLAYER_STEP if m is self.player else self.chaser_step))
+            m.t = min(1.0, m.t + dt / (self.player_step() if m is self.player else self.chaser_step))
 
         # 플레이어 이동
         self.player_timer = max(0.0, self.player_timer - dt)
@@ -167,7 +202,8 @@ class Game:
                 if not is_floor(self.grid, nxt):
                     continue
                 self.player.move_to(nxt)
-                self.player_timer = PLAYER_STEP
+                self.pickup()
+                self.player_timer = self.player_step()
                 self.last_move_dir = d
                 if self.player.pos == self.exit:
                     self.total_time += self.elapsed
@@ -228,6 +264,9 @@ class View:
         ex, ey = center(g.exit)
         pygame.draw.rect(s, EXIT_C, (ex - ts * 0.4, ey - ts * 0.4, ts * 0.8, ts * 0.8), border_radius=4)
 
+        for it in g.items:
+            self.draw_item(it.kind, center(it.pos), ts)
+
         if g.state == "over":  # AI가 어떤 길로 쫓아왔는지 보여 준다
             for path in g.death_paths:
                 if len(path) > 1:
@@ -236,6 +275,8 @@ class View:
         r = ts * 0.36
         for c in g.chasers:
             pygame.draw.circle(s, CHASER_C, center(c.draw_pos()), r)
+        if g.effects["speed"] > 0:  # 속도 증가 중: 플레이어 둘레에 노란 고리
+            pygame.draw.circle(s, ITEM_C["speed"], center(g.player.draw_pos()), r + max(2, ts // 6), max(2, ts // 8))
         pygame.draw.circle(s, PLAYER_C, center(g.player.draw_pos()), r)
 
         # 상단 정보줄
@@ -245,6 +286,7 @@ class View:
         if g.state == "play":
             msg = f"추격자 출발까지 {g.grace:.1f}초" if g.grace > 0 else "도망쳐!"
             self.text(self.font, msg, CHASER_C if g.grace <= 0 else TEXT_C, (WIN_W // 2, HUD_H // 2))
+            self.draw_effects(g)
 
         if g.state == "title":
             self.overlay()
@@ -267,6 +309,26 @@ class View:
             self.text(self.big, "잡혔다!", CHASER_C, (WIN_W // 2, 300))
             self.text(self.font, f"{g.stage}단계에서 종료  |  주황색 선: 추격자가 따라온 길", TEXT_C, (WIN_W // 2, 370))
             self.text(self.font, "R 또는 Enter: 1단계부터 다시", PATH_C, (WIN_W // 2, 410))
+
+    def draw_item(self, kind, c, ts):
+        """아이템 도형: 속도=노란 번개 모양 삼각형, 멈춤=하늘색 마름모, 파워=보라색 별 모양 원."""
+        s, col, r = self.screen, ITEM_C[kind], ts * 0.38
+        if kind == "speed":
+            pygame.draw.polygon(s, col, [(c[0] - r, c[1] + r), (c[0], c[1] - r), (c[0] + r, c[1] + r)])
+        elif kind == "freeze":
+            pygame.draw.polygon(s, col, [(c[0], c[1] - r), (c[0] + r, c[1]), (c[0], c[1] + r), (c[0] - r, c[1])])
+        else:
+            pygame.draw.circle(s, col, c, r)
+            pygame.draw.circle(s, BG, c, r * 0.45)
+
+    def draw_effects(self, g):
+        """위쪽 정보줄 오른쪽(가운데 문구와 시간 표시 사이)에 켜진 효과와 남은 시간을 짧게 표시한다."""
+        names = {"speed": "속도", "freeze": "멈춤", "power": "파워"}
+        x = 625
+        for kind in ("speed", "freeze", "power"):
+            if g.effects[kind] > 0:
+                self.text(self.font, f"{names[kind]} {g.effects[kind]:.1f}", ITEM_C[kind], (x + 38, HUD_H // 2))
+                x += 85
 
     def overlay(self):
         dim = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)

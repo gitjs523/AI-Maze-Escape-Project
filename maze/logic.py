@@ -224,3 +224,36 @@ def route_slack(grid, start, goal, chaser_positions, human_step, chaser_step, gr
         for d in dists:
             worst = min(worst, grace + (d.get(node, 1 << 30) - 1) * chaser_step - t)
     return worst
+
+
+def distances_from(grid, sources):
+    """여러 칸을 동시에 출발점으로 하는 BFS: 각 칸에서 가장 가까운 출발점까지의 걸음 수."""
+    from collections import deque
+
+    dist = {s: 0 for s in sources}
+    queue = deque(dist)
+    while queue:
+        cur = queue.popleft()
+        for nxt in neighbors(grid, cur):
+            if nxt not in dist:
+                dist[nxt] = dist[cur] + 1
+                queue.append(nxt)
+    return dist
+
+
+def place_items(grid, route, blocked, kinds, rng, detour=(2, 10), spacing=6):
+    """아이템을 놓을 칸을 고른다. 최단 경로(route)에서 detour 범위만큼 벗어난 곳이라
+    먹으려면 일부러 돌아가야 한다(위험과 보상의 선택). 반환: [(종류, 좌표), ...]"""
+    off = distances_from(grid, route)
+    picks = []
+    for kind in kinds:
+        # 조건을 조금씩 완화하며 자리를 찾는다 (작은 미로에서도 아이템이 빠지지 않도록)
+        for lo, hi, gap in ((detour[0], detour[1], spacing), (detour[0], detour[1] + 6, spacing // 2),
+                            (1, detour[1] + 12, 2)):
+            cands = [p for p, d in off.items()
+                     if lo <= d <= hi and p not in blocked and all(p != q for _, q in picks)
+                     and all(abs(p[0] - q[0]) + abs(p[1] - q[1]) >= gap for _, q in picks)]
+            if cands:
+                picks.append((kind, rng.choice(cands)))
+                break
+    return picks
