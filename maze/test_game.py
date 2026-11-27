@@ -301,12 +301,23 @@ def test_arrow_item_pickup_adds_ammo_with_cap():
     for _ in range(3):
         g.update(PLAYER_STEP + 0.01, RIGHT)
     assert g.items == []
-    assert g.ammo == ARROW_MAX                       # 2 + 2 + 2 이지만 최대치에서 멈춤
+    assert g.ammo == min(ARROW_MAX, 3 * ARROW_PER_ITEM)  # 먹은 만큼, 최대치에서 멈춤
+    assert ARROW_PER_ITEM == 1                       # 아이템 하나 = 화살 한 발
     g2 = make_corridor_game()
     g2.items = [Item("arrow", (2, 1))]
     g2.ammo = 0
     g2.update(0.01, RIGHT)
     assert g2.ammo == ARROW_PER_ITEM
+
+
+def test_leftover_arrows_do_not_carry_over_to_next_stage():
+    g = Game(random.Random(1))
+    g.state = "play"
+    g.stage = 3
+    g.start_stage()
+    g.ammo = 3
+    g.next_stage()
+    assert g.ammo == 0 and g.arrows == []
 
 
 def test_fire_needs_ammo_and_has_cooldown():

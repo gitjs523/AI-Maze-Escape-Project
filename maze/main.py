@@ -28,7 +28,7 @@ GRACE = 2.0         # 단계 시작 후 추격자가 출발하기까지 (초)
 FINAL_STAGE = 10    # 마지막 단계. 이 단계를 깨면 전체 클리어
 RESPAWN_TIME = 10.0  # 처치된 추격자가 먼 곳에서 다시 나타나기까지(초)
 ARROW_SPEED = 18.0   # 화살이 날아가는 속도(칸/초)
-ARROW_PER_ITEM = 2   # 화살 아이템 하나를 먹으면 얻는 화살 수
+ARROW_PER_ITEM = 1   # 화살 아이템 하나를 먹으면 얻는 화살 수
 ARROW_MAX = 3        # 한 번에 들 수 있는 화살 수
 FIRE_COOLDOWN = 0.4  # 발사 후 다음 발사까지(초)
 PATROL_DETECT = 8    # 순찰형 추격자가 플레이어를 발견하는 거리(걸어서 칸 수)
@@ -149,6 +149,7 @@ class Game:
         blocked = set(picks) | {start, self.exit}
         self.items = [Item(k, p) for k, p in
                       place_items(self.grid, route_tiles, blocked, item_kinds(self.stage), self.rng)]
+        self.ammo = 0       # 화살은 단계마다 새로 시작한다 (남은 화살을 다음 단계로 가져가지 않음)
         self.arrows = []    # 날아가는 화살들
         self.fire_cd = 0.0  # 다음 발사까지 남은 시간
         self.facing = (1, 0)
