@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from main import (Game, stage_params, PLAYER_STEP, GRACE, InputBuffer, KEY_DIRS,
                   HUMAN_STEP, HUMAN_DELAY, slack_window)
 import pygame
-from logic import astar, safe_path_exists, shortest_routes_safe, route_slack, chaser_slack_map, generate_maze, farthest_floor
+from logic import bfs_distances, route_nodes, astar, safe_path_exists, shortest_routes_safe, route_slack, chaser_slack_map, generate_maze, farthest_floor
 
 
 def run(game, policy, limit=120.0, dt=1 / 60):
@@ -85,6 +85,22 @@ def test_every_stage_is_fair_for_a_normal_human():
                 too_tight += 1
     print(f"  (사람 기준으로 빠듯한 판 {too_tight}/{total})")
     assert too_tight == 0
+
+
+def test_two_chasers_do_not_start_side_by_side():
+    """추격자 2명은 걸어서 경로 길이의 35% 이상(최소 12칸) 떨어진 곳에서 출발해야 한다 (한 마리처럼 붙어 쫓지 않게)."""
+    bad = total = 0
+    for stage in (4, 7, 10, 13, 15):
+        for seed in range(40):
+            g = Game(random.Random(seed * 3 + stage))
+            g.stage = stage
+            g.start_stage()
+            a, b = g.chasers[0].pos, g.chasers[1].pos
+            need = max(12, int(0.35 * len(route_nodes(g.grid, (1, 1), g.exit))))
+            total += 1
+            bad += bfs_distances(g.grid, a)[b] < need
+    print(f"  (붙어 시작한 판 {bad}/{total})")
+    assert bad <= total * 0.03  # 드문 대비책 경우만 허용
 
 
 def test_slack_map_matches_brute_force():

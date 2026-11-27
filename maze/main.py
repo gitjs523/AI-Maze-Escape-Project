@@ -93,12 +93,13 @@ class Game:
                                             self.chaser_step, GRACE, HUMAN_DELAY)
             off_route = [p for p in slack if p not in route]
             spots = [p for p in off_route if lo <= slack[p] <= hi]
-            picks = self.pick_spread(spots, n_chasers)
+            min_sep = max(12, int(0.35 * len(route)))  # 두 추격자는 경로 길이의 35% 이상 걸어야 만나는 곳에서 출발
+            picks = self.pick_spread(spots, n_chasers, min_sep)
             if picks:
                 break
             if fallback is None:  # 범위에 맞는 칸이 없을 때를 대비해 여유가 충분한 칸을 기억
                 safe_enough = [p for p in off_route if slack[p] >= lo]
-                fallback = self.pick_spread(safe_enough, n_chasers)
+                fallback = self.pick_spread(safe_enough, n_chasers, min_sep // 2)
         if not picks:
             picks = fallback or sorted(off_route, key=lambda p: -slack[p])[:n_chasers]
         self.player = Mover(start)
@@ -109,14 +110,17 @@ class Game:
         self.elapsed = 0.0
         self.death_paths = []
 
-    def pick_spread(self, spots, n):
-        """spots에서 서로 6칸 이상 떨어진 n곳을 무작위로 고른다 (없으면 빈 목록)."""
+    def pick_spread(self, spots, n, min_sep):
+        """spots에서 서로 '걸어서' min_sep칸 이상 떨어진 n곳을 무작위로 고른다 (없으면 빈 목록).
+        화면상 거리가 아니라 걸어야 하는 거리를 쓴다: 벽 하나 사이로 가까워 보여도 길이 멀면 떨어진 것."""
         if len(spots) < n:
             return []
-        for _ in range(30):
+        for _ in range(40):
             picks = self.rng.sample(spots, n)
-            if all(abs(a[0] - b[0]) + abs(a[1] - b[1]) >= 6
-                   for i, a in enumerate(picks) for b in picks[i + 1:]):
+            if n == 1:
+                return picks
+            reach = bfs_distances(self.grid, picks[0])
+            if all(reach.get(q, 1 << 30) >= min_sep for q in picks[1:]):
                 return picks
         return []
 
