@@ -6,7 +6,7 @@ import sys
 os.environ["SDL_VIDEODRIVER"] = "dummy"
 sys.path.insert(0, os.path.dirname(__file__))
 from main import (Game, stage_params, PLAYER_STEP, GRACE, InputBuffer, KEY_DIRS, FINAL_STAGE, REF_PLAYER_STEP,
-                  HUMAN_STEP, HUMAN_DELAY, slack_window, Item, SPEED_TIME, SPEED_FACTOR, item_kinds, FREEZE_TIME, ITEM_TIME, POWER_TIME, RESPAWN_TIME, Mover)
+                  HUMAN_STEP, HUMAN_DELAY, slack_window, Item, item_kinds, RESPAWN_TIME, Mover, ARROW_PER_ITEM, ARROW_MAX, FIRE_COOLDOWN)
 import pygame
 from logic import place_items, distances_from, bfs_distances, route_nodes, astar, safe_path_exists, shortest_routes_safe, route_slack, chaser_slack_map, generate_maze, farthest_floor
 
@@ -276,76 +276,6 @@ def test_items_are_placed_on_valid_off_route_tiles():
             assert len({i.pos for i in g.items}) == len(g.items)    # 서로 겹치지 않음
 
 
-def test_speed_item_picked_up_speeds_player_and_expires():
-    g = make_corridor_game()
-    g.effects = {"speed": 0.0, "freeze": 0.0, "power": 0.0}
-    g.items = [Item("speed", (2, 1))]
-    assert abs(g.player_step() - PLAYER_STEP) < 1e-9
-    g.update(0.01, RIGHT)
-    assert g.player.pos == (2, 1) and g.items == []
-    assert g.effects["speed"] > SPEED_TIME - 0.1
-    assert abs(g.player_step() - PLAYER_STEP * SPEED_FACTOR) < 1e-9
-    # 속도 증가 중에는 같은 시간에 더 많이 이동
-    g2 = make_corridor_game()
-    g2.effects = {"speed": 0.0, "freeze": 0.0, "power": 0.0}
-    g.update(PLAYER_STEP * SPEED_FACTOR + 0.001, RIGHT)
-    assert g.player.pos == (3, 1)                        # 짧아진 간격만에 한 칸 더 이동
-    # 시간이 지나면 원래 속도
-    for _ in range(int(SPEED_TIME * 60) + 5):
-        g.update(1 / 60, None)
-    assert g.effects["speed"] == 0.0 and abs(g.player_step() - PLAYER_STEP) < 1e-9
-
-
-def test_freeze_item_stops_chasers_then_they_resume():
-    g = Game(random.Random(1))
-    g.state = "play"
-    g.grace = 0.0
-    g.effects["freeze"] = FREEZE_TIME
-    before = [c.pos for c in g.chasers]
-    for _ in range(int((FREEZE_TIME - 0.3) * 60)):
-        g.update(1 / 60, None)
-    assert [c.pos for c in g.chasers] == before, "멈춤 중인데 추격자가 움직였다"
-    for _ in range(int(2.0 * 60)):  # 효과가 끝난 뒤 다시 쫓아와야 한다
-        g.update(1 / 60, None)
-    assert [c.pos for c in g.chasers] != before or g.state == "over"
-
-
-def test_freeze_item_picked_up_sets_effect_and_stage_items():
-    g = make_corridor_game()
-    g.effects = {"speed": 0.0, "freeze": 0.0, "power": 0.0}
-    g.items = [Item("freeze", (2, 1))]
-    g.update(0.01, RIGHT)
-    assert g.items == [] and g.effects["freeze"] > FREEZE_TIME - 0.1
-    assert item_kinds(1) == ["speed"] and "freeze" in item_kinds(2) and "freeze" in item_kinds(10)
-
-
-def test_power_kills_chaser_on_touch_and_it_respawns():
-    g = make_corridor_game()
-    g.effects = {"speed": 0.0, "freeze": 0.0, "power": POWER_TIME}
-    g.respawns = []
-    g.kills = 0
-    g.player.pos = g.player.prev = (2, 1)
-    g.chasers = [Mover((3, 1))]
-    g.update(0.01, RIGHT)                       # 추격자가 서 있는 칸으로 이동
-    assert g.state == "play" and g.chasers == [] and g.kills == 1
-    assert g.respawns and abs(g.respawns[0] - RESPAWN_TIME) < 0.1
-    for _ in range(int((RESPAWN_TIME + 0.5) * 60)):
-        g.update(1 / 60, None)
-        if g.state != "play":
-            break
-    assert len(g.chasers) == 1                  # 시간이 지나면 다시 등장
-
-
-def test_touch_without_power_is_still_game_over():
-    g = make_corridor_game()
-    g.effects = {"speed": 0.0, "freeze": 0.0, "power": 0.0}
-    g.respawns = []
-    g.player.pos = g.player.prev = (2, 1)
-    g.chasers = [Mover((3, 1))]
-    g.update(0.01, RIGHT)
-    assert g.state == "over"
-
-
 def test_respawned_chaser_appears_far_from_player():
     g = Game(random.Random(5))
     g.stage = 6
@@ -359,25 +289,75 @@ def test_respawned_chaser_appears_far_from_player():
     assert bfs_distances(g.grid, g.player.pos)[new.pos] >= 20
 
 
-def test_chasers_flee_during_power_and_never_approach():
-    for seed in range(8):
-        g = Game(random.Random(seed))
-        g.stage = 5
-        g.start_stage()
-        g.state = "play"
-        g.grace = 0.0
-        g.effects["power"] = 4.0
-        before = {id(c): bfs_distances(g.grid, g.player.pos)[c.pos] for c in g.chasers}
-        for _ in range(int(3.5 * 60)):
-            g.update(1 / 60, None)
-            dist = bfs_distances(g.grid, g.player.pos)
-            for c in g.chasers:
-                assert dist[c.pos] >= before[id(c)], (seed, dist[c.pos], before[id(c)])
-                before[id(c)] = dist[c.pos]
+def test_item_kinds_by_stage():
+    assert item_kinds(1) == [] and item_kinds(2) == ["arrow"] and item_kinds(3) == ["arrow"]
+    assert item_kinds(4) == ["arrow", "arrow"] and item_kinds(10) == ["arrow", "arrow"]
 
 
-def test_power_item_exists_from_stage_3():
-    assert "power" not in item_kinds(2) and "power" in item_kinds(3) and "power" in item_kinds(10)
+def test_arrow_item_pickup_adds_ammo_with_cap():
+    g = make_corridor_game()
+    g.items = [Item("arrow", (2, 1)), Item("arrow", (3, 1)), Item("arrow", (4, 1))]
+    g.ammo = 0
+    for _ in range(3):
+        g.update(PLAYER_STEP + 0.01, RIGHT)
+    assert g.items == []
+    assert g.ammo == ARROW_MAX                       # 2 + 2 + 2 이지만 최대치에서 멈춤
+    g2 = make_corridor_game()
+    g2.items = [Item("arrow", (2, 1))]
+    g2.ammo = 0
+    g2.update(0.01, RIGHT)
+    assert g2.ammo == ARROW_PER_ITEM
+
+
+def test_fire_needs_ammo_and_has_cooldown():
+    g = make_corridor_game()
+    g.ammo = 0
+    assert g.fire() is False and g.arrows == []
+    g.ammo = 2
+    assert g.fire() is True and g.ammo == 1 and len(g.arrows) == 1
+    assert g.fire() is False and g.ammo == 1          # 쿨다운 중
+    g.update(FIRE_COOLDOWN + 0.01, None)
+    assert g.fire() is True and g.ammo == 0
+
+
+def test_arrow_kills_first_chaser_in_line_and_it_respawns():
+    g = make_corridor_game()
+    g.ammo = 1
+    g.facing = RIGHT
+    g.chasers = [Mover((4, 1)), Mover((3, 1))]       # 가까운 쪽(3,1)이 먼저 맞아야 한다
+    g.respawns = []
+    g.kills = 0
+    g.fire()
+    g.update(0.3, None)
+    assert [c.pos for c in g.chasers] == [(4, 1)] and g.kills == 1
+    assert g.arrows == [] and g.state == "play"
+    assert g.respawns and abs(g.respawns[0] - RESPAWN_TIME) < 0.5
+    for _ in range(int((RESPAWN_TIME + 0.5) * 60)):  # 시간이 지나면 다시 등장
+        g.update(1 / 60, None)
+        if g.state != "play":
+            break
+    assert len(g.chasers) == 2 or g.state != "play"
+
+
+def test_arrow_stops_at_wall_and_misses_chaser_out_of_line():
+    g = make_corridor_game()                          # (1,1)~(4,1) 가로 복도, (4,2),(4,3) 아래로
+    g.ammo = 1
+    g.facing = RIGHT
+    g.chasers = [Mover((4, 3))]                       # 일직선이 아닌 곳
+    g.fire()
+    g.update(1.0, None)
+    assert g.arrows == [] and len(g.chasers) == 1 and g.kills == 0
+
+
+def test_arrow_flies_in_facing_direction_even_after_turning():
+    g = make_corridor_game()
+    g.player.pos = g.player.prev = (4, 1)
+    g.ammo = 1
+    g.face(DOWN)
+    g.chasers = [Mover((4, 3))]
+    g.fire()
+    g.update(0.3, None)
+    assert g.chasers == [] and g.kills == 1
 
 
 def test_place_items_helper_basic():
