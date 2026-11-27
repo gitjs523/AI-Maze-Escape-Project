@@ -7,7 +7,7 @@ import pygame
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from logic import (astar, bfs_distances, chaser_slack_map, farthest_floor, generate_maze, is_floor,
-                   place_items)
+                   neighbors, place_items)
 
 WIN_W, WIN_H = 960, 720
 HUD_H = 48
@@ -27,7 +27,9 @@ GRACE = 2.0         # 단계 시작 후 추격자가 출발하기까지 (초)
 FINAL_STAGE = 10    # 마지막 단계. 이 단계를 깨면 전체 클리어
 SPEED_TIME = 4.0    # 속도 증가 아이템 효과 시간(초)
 FREEZE_TIME = 3.0   # 추격자 멈춤 아이템 효과 시간(초)
-ITEM_TIME = {"speed": SPEED_TIME, "freeze": FREEZE_TIME, "power": 5.0}  # 종류별 효과 시간
+POWER_TIME = 5.0    # 파워 아이템 효과 시간(초): 추격자가 도망가고, 닿으면 처치
+RESPAWN_TIME = 8.0  # 처치된 추격자가 먼 곳에서 다시 나타나기까지(초)
+ITEM_TIME = {"speed": SPEED_TIME, "freeze": FREEZE_TIME, "power": POWER_TIME}  # 종류별 효과 시간
 SPEED_FACTOR = 0.6  # 속도 증가 중 칸당 시간 배율 (작을수록 빠름)
 REF_PLAYER_STEP = 0.11  # 추격자 속도표를 만들 때 기준으로 삼은 플레이어 속도 (아래 stage_params 참고)
 
@@ -42,6 +44,8 @@ def item_kinds(stage):
     kinds = ["speed"]
     if stage >= 2:
         kinds.append("freeze")
+    if stage >= 3:
+        kinds.append("power")
     return kinds
 
 
@@ -102,6 +106,7 @@ class Game:
         self.rng = rng or random.Random()
         self.stage = 1
         self.total_time = 0.0  # 지금까지 깬 단계들에 걸린 시간 합계
+        self.kills = 0         # 이번 도전에서 처치한 추격자 수
         self.state = "title"  # title / play / clear / win / over
         self.start_stage()
 
@@ -136,6 +141,7 @@ class Game:
         self.items = [Item(k, p) for k, p in
                       place_items(self.grid, route_tiles, blocked, item_kinds(self.stage), self.rng)]
         self.effects = {"speed": 0.0, "freeze": 0.0, "power": 0.0}  # 남은 효과 시간(초)
+        self.respawns = []  # 처치된 추격자가 다시 나타나기까지 남은 시간(초) 목록
         self.player_timer = 0.0
         self.chaser_timer = 0.0
         self.grace = GRACE
@@ -164,6 +170,7 @@ class Game:
     def restart(self):
         self.stage = 1
         self.total_time = 0.0
+        self.kills = 0
         self.start_stage()
         self.state = "play"
 
@@ -181,6 +188,37 @@ class Game:
     def caught(self):
         return any(c.pos == self.player.pos for c in self.chasers)
 
+    def resolve_collisions(self):
+        """플레이어와 추격자가 같은 칸이면: 파워 중에는 추격자 처치, 아니면 잡힘(게임 오버). 게임이 끝났으면 True."""
+        hit = [c for c in self.chasers if c.pos == self.player.pos]
+        if not hit:
+            return False
+        if self.effects["power"] > 0:
+            for c in hit:
+                self.chasers.remove(c)
+                self.kills += 1
+                self.respawns.append(RESPAWN_TIME)
+            return False
+        self.finish_caught()
+        return True
+
+    def spawn_chaser(self):
+        """처치된 추격자를 플레이어에게서 먼 곳(걸어서 20칸 이상, 가능하면 미로의 먼 쪽)에 다시 내보낸다."""
+        dist = bfs_distances(self.grid, self.player.pos)
+        far = max(dist.values())
+        cands = [p for p, d in dist.items() if d >= max(20, 0.4 * far) and p != self.exit]
+        pos = self.rng.choice(cands) if cands else max(dist, key=dist.get)
+        self.chasers.append(Mover(pos))
+
+    def flee_step(self, pos, dist_from_player):
+        """파워 중 추격자의 이동: 플레이어와 걸어서 가장 멀어지는 이웃 칸으로 (몰리면 제자리)."""
+        here = dist_from_player.get(pos, 0)
+        options = [n for n in neighbors(self.grid, pos) if dist_from_player.get(n, 0) > here]
+        if not options:
+            return None
+        best = max(dist_from_player.get(n, 0) for n in options)
+        return self.rng.choice([n for n in options if dist_from_player.get(n, 0) == best])
+
     def update(self, dt, held_dir):
         """dt초 진행. held_dir은 이동을 시도할 방향 하나 또는 우선순위 목록 (없으면 None)."""
         self.last_move_dir = None
@@ -189,6 +227,11 @@ class Game:
         self.elapsed += dt
         for k in self.effects:
             self.effects[k] = max(0.0, self.effects[k] - dt)
+        for i in range(len(self.respawns) - 1, -1, -1):  # 처치된 추격자 재등장
+            self.respawns[i] -= dt
+            if self.respawns[i] <= 0:
+                del self.respawns[i]
+                self.spawn_chaser()
         for m in [self.player, *self.chasers]:
             m.t = min(1.0, m.t + dt / (self.player_step() if m is self.player else self.chaser_step))
 
@@ -214,8 +257,7 @@ class Game:
                     self.total_time += self.elapsed
                     self.state = "win" if self.stage >= FINAL_STAGE else "clear"
                     return
-                if self.caught():
-                    self.finish_caught()
+                if self.resolve_collisions():
                     return
                 break
 
@@ -226,12 +268,18 @@ class Game:
         self.chaser_timer -= dt
         while self.chaser_timer <= 0:
             self.chaser_timer += self.chaser_step
-            for c in self.chasers:
-                path = astar(self.grid, c.pos, self.player.pos)
-                if path and len(path) > 1:
-                    c.move_to(path[1])
-            if self.caught():
-                self.finish_caught()
+            if self.effects["power"] > 0:  # 파워 중: 플레이어에게서 도망
+                pd = bfs_distances(self.grid, self.player.pos)
+                for c in self.chasers:
+                    nxt = self.flee_step(c.pos, pd)
+                    if nxt:
+                        c.move_to(nxt)
+            else:
+                for c in self.chasers:
+                    path = astar(self.grid, c.pos, self.player.pos)
+                    if path and len(path) > 1:
+                        c.move_to(path[1])
+            if self.resolve_collisions():
                 return
 
     def finish_caught(self):
@@ -279,10 +327,14 @@ class View:
 
         r = ts * 0.36
         frozen = g.effects["freeze"] > 0
+        weak = g.effects["power"] > 0
+        blink = weak and g.effects["power"] < 1.5 and int(g.effects["power"] * 6) % 2 == 0  # 끝나 가면 깜빡임
         for c in g.chasers:
-            pygame.draw.circle(s, ITEM_C["freeze"] if frozen else CHASER_C, center(c.draw_pos()), r)
-        if g.effects["speed"] > 0:  # 속도 증가 중: 플레이어 둘레에 노란 고리
-            pygame.draw.circle(s, ITEM_C["speed"], center(g.player.draw_pos()), r + max(2, ts // 6), max(2, ts // 8))
+            col = (255, 255, 255) if blink else ITEM_C["power"] if weak else ITEM_C["freeze"] if frozen else CHASER_C
+            pygame.draw.circle(s, col, center(c.draw_pos()), r)
+        for kind in ("speed", "power"):  # 효과 중: 플레이어 둘레에 아이템 색 고리
+            if g.effects[kind] > 0:
+                pygame.draw.circle(s, ITEM_C[kind], center(g.player.draw_pos()), r + max(2, ts // 6), max(2, ts // 8))
         pygame.draw.circle(s, PLAYER_C, center(g.player.draw_pos()), r)
 
         # 상단 정보줄
@@ -330,11 +382,11 @@ class View:
     def draw_effects(self, g):
         """위쪽 정보줄 오른쪽(가운데 문구와 시간 표시 사이)에 켜진 효과와 남은 시간을 짧게 표시한다."""
         names = {"speed": "속도", "freeze": "멈춤", "power": "파워"}
-        x = 625
+        x = 615
         for kind in ("speed", "freeze", "power"):
             if g.effects[kind] > 0:
                 self.text(self.font, f"{names[kind]} {g.effects[kind]:.1f}", ITEM_C[kind], (x + 38, HUD_H // 2))
-                x += 85
+                x += 95
 
     def overlay(self):
         dim = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)

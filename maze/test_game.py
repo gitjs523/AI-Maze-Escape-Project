@@ -6,7 +6,7 @@ import sys
 os.environ["SDL_VIDEODRIVER"] = "dummy"
 sys.path.insert(0, os.path.dirname(__file__))
 from main import (Game, stage_params, PLAYER_STEP, GRACE, InputBuffer, KEY_DIRS, FINAL_STAGE, REF_PLAYER_STEP,
-                  HUMAN_STEP, HUMAN_DELAY, slack_window, Item, SPEED_TIME, SPEED_FACTOR, item_kinds, FREEZE_TIME, ITEM_TIME)
+                  HUMAN_STEP, HUMAN_DELAY, slack_window, Item, SPEED_TIME, SPEED_FACTOR, item_kinds, FREEZE_TIME, ITEM_TIME, POWER_TIME, RESPAWN_TIME, Mover)
 import pygame
 from logic import place_items, distances_from, bfs_distances, route_nodes, astar, safe_path_exists, shortest_routes_safe, route_slack, chaser_slack_map, generate_maze, farthest_floor
 
@@ -317,6 +317,67 @@ def test_freeze_item_picked_up_sets_effect_and_stage_items():
     g.update(0.01, RIGHT)
     assert g.items == [] and g.effects["freeze"] > FREEZE_TIME - 0.1
     assert item_kinds(1) == ["speed"] and "freeze" in item_kinds(2) and "freeze" in item_kinds(10)
+
+
+def test_power_kills_chaser_on_touch_and_it_respawns():
+    g = make_corridor_game()
+    g.effects = {"speed": 0.0, "freeze": 0.0, "power": POWER_TIME}
+    g.respawns = []
+    g.kills = 0
+    g.player.pos = g.player.prev = (2, 1)
+    g.chasers = [Mover((3, 1))]
+    g.update(0.01, RIGHT)                       # 추격자가 서 있는 칸으로 이동
+    assert g.state == "play" and g.chasers == [] and g.kills == 1
+    assert g.respawns and abs(g.respawns[0] - RESPAWN_TIME) < 0.1
+    for _ in range(int((RESPAWN_TIME + 0.5) * 60)):
+        g.update(1 / 60, None)
+        if g.state != "play":
+            break
+    assert len(g.chasers) == 1                  # 시간이 지나면 다시 등장
+
+
+def test_touch_without_power_is_still_game_over():
+    g = make_corridor_game()
+    g.effects = {"speed": 0.0, "freeze": 0.0, "power": 0.0}
+    g.respawns = []
+    g.player.pos = g.player.prev = (2, 1)
+    g.chasers = [Mover((3, 1))]
+    g.update(0.01, RIGHT)
+    assert g.state == "over"
+
+
+def test_respawned_chaser_appears_far_from_player():
+    g = Game(random.Random(5))
+    g.stage = 6
+    g.start_stage()
+    g.state = "play"
+    g.chasers.pop()
+    g.respawns = [0.01]
+    g.update(0.05, None)
+    assert len(g.chasers) == len(set(c.pos for c in g.chasers)) == stage_params(6)[2]
+    new = g.chasers[-1]
+    assert bfs_distances(g.grid, g.player.pos)[new.pos] >= 20
+
+
+def test_chasers_flee_during_power_and_never_approach():
+    for seed in range(8):
+        g = Game(random.Random(seed))
+        g.stage = 5
+        g.start_stage()
+        g.state = "play"
+        g.grace = 0.0
+        g.effects["power"] = 4.0
+        before = {id(c): bfs_distances(g.grid, g.player.pos)[c.pos] for c in g.chasers}
+        for _ in range(int(3.5 * 60)):
+            g.update(1 / 60, None)
+            dist = bfs_distances(g.grid, g.player.pos)
+            for c in g.chasers:
+                assert dist[c.pos] >= before[id(c)], (seed, dist[c.pos], before[id(c)])
+                before[id(c)] = dist[c.pos]
+
+
+def test_power_item_exists_from_stage_3():
+    assert "power" not in item_kinds(2) and "power" in item_kinds(3) and "power" in item_kinds(10)
 
 
 def test_place_items_helper_basic():
