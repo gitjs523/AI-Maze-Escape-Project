@@ -6,7 +6,7 @@ import sys
 import pygame
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from logic import astar, bfs_distances, farthest_floor, generate_maze, is_floor, safe_path_exists
+from logic import astar, bfs_distances, farthest_floor, generate_maze, is_floor, safe_path_exists, shortest_routes_safe
 
 WIN_W, WIN_H = 960, 720
 HUD_H = 48
@@ -84,8 +84,9 @@ class Game:
                 continue
             for _ in range(40):  # 같은 미로에서 추격자 위치를 다시 뽑는 횟수
                 picks = self.rng.sample(spots, n_chasers)
-                if safe_path_exists(self.grid, start, self.exit, picks,
-                                    PLAYER_STEP, self.chaser_step, GRACE):
+                args = (self.grid, start, self.exit, picks, PLAYER_STEP, self.chaser_step, GRACE)
+                # 눈에 띄는 최단 경로로 가도 안전하고, 안전한 길도 있어야 통과
+                if shortest_routes_safe(*args) and safe_path_exists(*args):
                     break
             else:
                 continue

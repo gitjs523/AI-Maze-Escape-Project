@@ -151,3 +151,26 @@ def safe_path_exists(grid, start, goal, chaser_positions, player_step, chaser_st
                 seen[nxt] = seen[cur] + 1
                 queue.append(nxt)
     return False
+
+
+def shortest_routes_safe(grid, start, goal, chaser_positions, player_step, chaser_step, grace, margin=2):
+    """출구까지의 최단 경로 위에 있는 모든 칸이 안전한가.
+
+    사람은 눈에 띄는 가장 짧은 길로 가기 쉽다. 그 길로 가도 추격자보다 먼저 지나갈 수 있어야
+    '돌아가야만 사는 판'이 되지 않는다.
+    """
+    d_start = bfs_distances(grid, start)
+    d_goal = bfs_distances(grid, goal)
+    total = d_start[goal]
+    dists = [bfs_distances(grid, c) for c in chaser_positions]
+    blocked = set(chaser_positions)
+    for node, steps in d_start.items():
+        if steps + d_goal[node] != total:  # 최단 경로 위의 칸만 본다
+            continue
+        if node in blocked:
+            return False
+        t = steps * player_step
+        for d in dists:
+            if not t + margin * chaser_step < grace + (d.get(node, 1 << 30) - 1) * chaser_step:
+                return False
+    return True

@@ -6,7 +6,7 @@ import sys
 os.environ["SDL_VIDEODRIVER"] = "dummy"
 sys.path.insert(0, os.path.dirname(__file__))
 from main import Game, stage_params, PLAYER_STEP, GRACE
-from logic import astar, safe_path_exists
+from logic import astar, safe_path_exists, shortest_routes_safe
 
 
 def run(game, policy, limit=120.0, dt=1 / 60):
@@ -73,8 +73,8 @@ def test_every_stage_is_fair():
             g.stage = stage
             g.start_stage()
             total += 1
-            if not safe_path_exists(g.grid, (1, 1), g.exit, [c.pos for c in g.chasers],
-                                    PLAYER_STEP, g.chaser_step, GRACE):
+            args = (g.grid, (1, 1), g.exit, [c.pos for c in g.chasers], PLAYER_STEP, g.chaser_step, GRACE)
+            if not (safe_path_exists(*args) and shortest_routes_safe(*args)):
                 bad += 1
     print(f"  (불공평한 판 {bad}/{total})")
     assert bad == 0
