@@ -128,7 +128,7 @@ class Game:
         self.player_timer = max(0.0, self.player_timer - dt)
         if self.player_timer <= 0:
             # 우선순위 순서대로 갈 수 있는 첫 방향으로 이동 (막힌 방향은 건너뜀)
-            if held_dir is None:
+            if not held_dir:  # None 또는 빈 목록: 누른 키 없음
                 dirs = []
             elif isinstance(held_dir[0], int):
                 dirs = [held_dir]

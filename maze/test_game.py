@@ -147,6 +147,23 @@ def test_tapped_turn_before_junction_is_not_lost():
     assert turned
 
 
+def test_no_keys_pressed_does_not_crash():
+    """키를 아무것도 안 눌렀을 때(None, 빈 목록)도 안 죽어야 한다 — 시작 직후 실제로 발생한 버그."""
+    for empty in (None, [], ()):
+        g = make_corridor_game()
+        g.update(0.5, empty)
+        assert g.player.pos == (1, 1)
+    # 실제 main 루프와 같은 방식: 제목 화면 → 시작 → 키 없이 진행
+    buf = InputBuffer()
+    g = Game(random.Random(1))
+    g.update(1 / 60, buf.candidates({k: False for k in KEY_DIRS}))
+    g.state = "play"
+    for _ in range(300):
+        buf.tick(1 / 60)
+        g.update(1 / 60, buf.candidates({k: False for k in KEY_DIRS}))
+        buf.moved(g.last_move_dir)
+
+
 def test_buffered_turn_expires():
     buf = InputBuffer()
     buf.keydown(pygame.K_DOWN)
