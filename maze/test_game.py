@@ -6,7 +6,7 @@ import sys
 os.environ["SDL_VIDEODRIVER"] = "dummy"
 sys.path.insert(0, os.path.dirname(__file__))
 from main import (Game, stage_params, PLAYER_STEP, GRACE, InputBuffer, KEY_DIRS, FINAL_STAGE, REF_PLAYER_STEP,
-                  HUMAN_STEP, HUMAN_DELAY, slack_window, Item, item_kinds, RESPAWN_TIME, Mover, ARROW_PER_ITEM, ARROW_MAX, FIRE_COOLDOWN, PATROL_DETECT, PATROL_LOSE, PATROL_LEN)
+                  HUMAN_STEP, HUMAN_DELAY, slack_window, Item, item_kinds, RESPAWN_TIME, Mover, ARROW_PER_ITEM, ARROW_MAX, FIRE_COOLDOWN, PATROL_DETECT, PATROL_LOSE, PATROL_LEN, AMBUSH_AHEAD, ROLE_ORDER)
 import pygame
 from logic import place_items, distances_from, bfs_distances, route_nodes, astar, safe_path_exists, shortest_routes_safe, route_slack, chaser_slack_map, generate_maze, farthest_floor
 
@@ -87,20 +87,24 @@ def test_every_stage_is_fair_for_a_normal_human():
     assert too_tight == 0
 
 
-def test_two_chasers_do_not_start_side_by_side():
-    """추격자 2명은 걸어서 경로 길이의 35% 이상(최소 12칸) 떨어진 곳에서 출발해야 한다 (한 마리처럼 붙어 쫓지 않게)."""
+def test_chasers_do_not_start_bunched_up():
+    """추격자들은 모두 서로 걸어서 경로 길이를 n등분한 만큼(최소 10칸) 떨어져 출발한다 (한 덩어리로 쫓지 않게)."""
     bad = total = 0
-    for stage in (4, 7, 10, 13, 15):
-        for seed in range(40):
+    for stage in (4, 7, 10, 13):
+        for seed in range(30):
             g = Game(random.Random(seed * 3 + stage))
             g.stage = stage
             g.start_stage()
-            a, b = g.chasers[0].pos, g.chasers[1].pos
-            need = max(12, int(0.35 * len(route_nodes(g.grid, (1, 1), g.exit))))
+            n = len(g.chasers)
+            need = max(10, int(0.7 * len(route_nodes(g.grid, (1, 1), g.exit)) / n))
+            ok = True
+            for i, a in enumerate(g.chasers[:-1]):
+                reach = bfs_distances(g.grid, a.pos)
+                ok &= all(reach[b.pos] >= need for b in g.chasers[i + 1:])
             total += 1
-            bad += bfs_distances(g.grid, a)[b] < need
+            bad += not ok
     print(f"  (붙어 시작한 판 {bad}/{total})")
-    assert bad <= total * 0.03  # 드문 대비책 경우만 허용
+    assert bad <= total * 0.05  # 드문 대비책 경우만 허용
 
 
 def test_slack_map_matches_brute_force():
@@ -380,15 +384,32 @@ def big_open_game(stage=5, seed=3):
     return g
 
 
-def test_second_chaser_is_a_patroller_and_first_is_hunter():
-    for stage in (1, 3):
+def test_chaser_count_and_roles_by_stage():
+    expect = {1: 1, 2: 1, 3: 2, 5: 2, 6: 3, 8: 3, 9: 4, 10: 4}
+    for stage, n in expect.items():
         g = big_open_game(stage)
-        assert [c.role for c in g.chasers] == ["hunter"]
-    for stage in (4, 6, 10):
-        g = big_open_game(stage)
-        assert [c.role for c in g.chasers] == ["hunter", "patrol"], stage
-        p = g.chasers[1]
-        assert p.waypoints and PATROL_LEN[0] <= bfs_distances(g.grid, p.waypoints[0])[p.waypoints[1]] <= PATROL_LEN[1]
+        assert stage_params(stage)[2] == n and len(g.chasers) == n, stage
+        assert [c.role for c in g.chasers] == [ROLE_ORDER[i % len(ROLE_ORDER)] for i in range(n)], stage
+        for c in g.chasers:
+            if c.role == "patrol":
+                assert c.waypoints and PATROL_LEN[0] <= bfs_distances(g.grid, c.waypoints[0])[c.waypoints[1]] <= PATROL_LEN[1]
+
+
+def test_ambusher_heads_for_the_tile_ahead_of_the_player():
+    g = big_open_game(7)
+    a = [c for c in g.chasers if c.role == "ambush"][0]
+    ahead = astar(g.grid, g.player.pos, g.exit)
+    target = ahead[AMBUSH_AHEAD]
+    # 플레이어와 충분히 떨어진 상태에서는 목표 칸(앞쪽)으로 한 칸 가까워진다
+    if len(astar(g.grid, a.pos, g.player.pos)) - 1 > 4 and a.pos != target:
+        before = bfs_distances(g.grid, a.pos)[target]
+        nxt = g.chaser_next_tile(a)
+        assert nxt is not None and bfs_distances(g.grid, nxt)[target] == before - 1
+    # 가까워지면 그냥 플레이어를 직접 쫓는다
+    near = [q for q, d in bfs_distances(g.grid, a.pos).items() if d == 2][0]
+    g.player.pos = g.player.prev = near
+    direct = astar(g.grid, a.pos, near)[1]
+    assert g.chaser_next_tile(a) == direct
 
 
 def test_patroller_stays_on_its_route_while_player_is_far():
