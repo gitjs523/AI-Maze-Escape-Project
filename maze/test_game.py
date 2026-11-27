@@ -6,7 +6,7 @@ import sys
 os.environ["SDL_VIDEODRIVER"] = "dummy"
 sys.path.insert(0, os.path.dirname(__file__))
 from main import (Game, stage_params, PLAYER_STEP, GRACE, InputBuffer, KEY_DIRS, FINAL_STAGE, REF_PLAYER_STEP,
-                  HUMAN_STEP, HUMAN_DELAY, slack_window, Item, item_kinds, RESPAWN_TIME, Mover, ARROW_PER_ITEM, ARROW_MAX, FIRE_COOLDOWN)
+                  HUMAN_STEP, HUMAN_DELAY, slack_window, Item, item_kinds, RESPAWN_TIME, Mover, ARROW_PER_ITEM, ARROW_MAX, FIRE_COOLDOWN, PATROL_DETECT, PATROL_LOSE, PATROL_LEN)
 import pygame
 from logic import place_items, distances_from, bfs_distances, route_nodes, astar, safe_path_exists, shortest_routes_safe, route_slack, chaser_slack_map, generate_maze, farthest_floor
 
@@ -358,6 +358,68 @@ def test_arrow_flies_in_facing_direction_even_after_turning():
     g.fire()
     g.update(0.3, None)
     assert g.chasers == [] and g.kills == 1
+
+
+def big_open_game(stage=5, seed=3):
+    g = Game(random.Random(seed))
+    g.stage = stage
+    g.start_stage()
+    g.state = "play"
+    g.grace = 0.0
+    return g
+
+
+def test_second_chaser_is_a_patroller_and_first_is_hunter():
+    for stage in (1, 3):
+        g = big_open_game(stage)
+        assert [c.role for c in g.chasers] == ["hunter"]
+    for stage in (4, 6, 10):
+        g = big_open_game(stage)
+        assert [c.role for c in g.chasers] == ["hunter", "patrol"], stage
+        p = g.chasers[1]
+        assert p.waypoints and PATROL_LEN[0] <= bfs_distances(g.grid, p.waypoints[0])[p.waypoints[1]] <= PATROL_LEN[1]
+
+
+def test_patroller_stays_on_its_route_while_player_is_far():
+    g = big_open_game(6)
+    p = g.chasers[1]
+    g.chasers = [p]                                   # 순찰형만 두고
+    far_player = max(bfs_distances(g.grid, p.pos).items(), key=lambda kv: kv[1])[0]
+    g.player.pos = g.player.prev = far_player        # 플레이어는 아주 먼 곳
+    route = set(astar(g.grid, p.waypoints[0], p.waypoints[1]))
+    assert bfs_distances(g.grid, far_player)[p.pos] > PATROL_DETECT + 5
+    for _ in range(int(25 * 60)):
+        g.update(1 / 60, None)
+        assert g.state == "play"
+    assert not p.chasing and set(p.trail) <= route, "순찰 구간을 벗어났다"
+    assert len(set(p.trail)) > 3, "제자리에 서 있었다"
+
+
+def test_patroller_chases_when_player_is_near_and_gives_up_when_far():
+    g = big_open_game(6)
+    p = g.chasers[1]
+    g.chasers = [p]
+    a, b = p.waypoints
+    # 순찰 경로 위에서 발견 거리 안쪽에 플레이어를 둔다
+    near = [q for q, d in bfs_distances(g.grid, p.pos).items() if 3 <= d <= PATROL_DETECT]
+    g.player.pos = g.player.prev = near[0]
+    g.update(g.chaser_step + 0.01, None)
+    assert p.chasing, "가까이 갔는데 쫓지 않는다"
+    # 아주 멀리 가면 놓친다
+    far = max(bfs_distances(g.grid, p.pos).items(), key=lambda kv: kv[1])[0]
+    g.player.pos = g.player.prev = far
+    assert bfs_distances(g.grid, far)[p.pos] > PATROL_LOSE
+    g.update(g.chaser_step + 0.01, None)
+    assert not p.chasing
+
+
+def test_respawned_patroller_keeps_its_role():
+    g = big_open_game(6)
+    p = g.chasers[1]
+    g.kill_chaser(p)
+    assert g.respawn_roles == ["patrol"]
+    g.update(RESPAWN_TIME + 0.1, None)
+    assert any(c.role == "patrol" for c in g.chasers)
 
 
 def test_place_items_helper_basic():

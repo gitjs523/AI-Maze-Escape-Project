@@ -17,6 +17,7 @@ WALL_C = (52, 58, 84)
 FLOOR_C = (30, 34, 48)
 PLAYER_C = (90, 200, 255)
 CHASER_C = (255, 90, 90)
+PATROL_C = (255, 160, 60)  # 순찰형 추격자(아직 플레이어를 못 찾았을 때)
 EXIT_C = (90, 230, 130)
 PATH_C = (255, 180, 80)
 TEXT_C = (235, 238, 245)
@@ -30,6 +31,9 @@ ARROW_SPEED = 18.0   # 화살이 날아가는 속도(칸/초)
 ARROW_PER_ITEM = 2   # 화살 아이템 하나를 먹으면 얻는 화살 수
 ARROW_MAX = 3        # 한 번에 들 수 있는 화살 수
 FIRE_COOLDOWN = 0.4  # 발사 후 다음 발사까지(초)
+PATROL_DETECT = 8    # 순찰형 추격자가 플레이어를 발견하는 거리(걸어서 칸 수)
+PATROL_LOSE = 14     # 쫓다가 이 거리보다 멀어지면 놓치고 순찰로 돌아감
+PATROL_LEN = (8, 14)  # 순찰 구간 길이(두 지점 사이 걸어서 칸 수)
 REF_PLAYER_STEP = 0.11  # 추격자 속도표를 만들 때 기준으로 삼은 플레이어 속도 (아래 stage_params 참고)
 
 # 보통 사람 기준: 판을 보고 정하느라 1.5초 뒤에 움직이기 시작하고, 플레이어 최대 속도보다 조금 느리게(칸당 0.15초) 간다.
@@ -78,6 +82,10 @@ class Mover:
         self.prev = pos
         self.t = 1.0  # 0~1, 1이면 도착 완료
         self.trail = [pos]  # 지나온 칸 기록 (게임 오버 때 추격 경로로 보여 줌)
+        self.role = "hunter"   # hunter: 항상 플레이어 위치를 알고 쫓음 / patrol: 구간을 순찰하다가 가까워지면 쫓음
+        self.waypoints = None  # 순찰형: 순찰하는 두 지점
+        self.widx = 1          # 순찰형: 지금 향하는 지점 번호
+        self.chasing = False   # 순찰형: 플레이어를 쫓는 중인지
 
     def move_to(self, pos):
         self.prev, self.pos, self.t = self.pos, pos, 0.0
@@ -135,6 +143,8 @@ class Game:
             picks = fallback or sorted(off_route, key=lambda p: -slack[p])[:n_chasers]
         self.player = Mover(start)
         self.chasers = [Mover(p) for p in picks]
+        for c in self.chasers[1:2]:  # 두 번째 추격자는 순찰형 (1명뿐인 단계는 사냥꾼만)
+            self.make_patrol(c)
         route_tiles = set(route)
         blocked = set(picks) | {start, self.exit}
         self.items = [Item(k, p) for k, p in
@@ -143,6 +153,7 @@ class Game:
         self.fire_cd = 0.0  # 다음 발사까지 남은 시간
         self.facing = (1, 0)
         self.respawns = []  # 처치된 추격자가 다시 나타나기까지 남은 시간(초) 목록
+        self.respawn_roles = []  # 위 목록과 같은 순서의 역할(되살아날 때 같은 역할로)
         self.player_timer = 0.0
         self.chaser_timer = 0.0
         self.grace = GRACE
@@ -224,10 +235,40 @@ class Game:
                     self.arrows.remove(a)
                     break
 
+    def make_patrol(self, c):
+        """c를 순찰형으로 만든다: 지금 있는 곳과, 걸어서 8~14칸 떨어진 곳 사이를 오간다."""
+        dist = bfs_distances(self.grid, c.pos)
+        cands = [p for p, d in dist.items() if PATROL_LEN[0] <= d <= PATROL_LEN[1]]
+        if not cands:
+            return  # 너무 좁은 곳이면 사냥꾼으로 둔다
+        c.role = "patrol"
+        c.waypoints = (c.pos, self.rng.choice(cands))
+        c.widx = 1
+        c.chasing = False
+
     def kill_chaser(self, c):
         self.chasers.remove(c)
         self.kills += 1
         self.respawns.append(RESPAWN_TIME)
+        self.respawn_roles.append(c.role)
+
+    def chaser_next_tile(self, c):
+        """추격자 c가 이번 칸에 갈 곳. 사냥꾼은 항상 플레이어 쪽 최단 경로, 순찰형은 순찰하다 발견하면 추격."""
+        path = astar(self.grid, c.pos, self.player.pos)
+        if c.role == "hunter":
+            return path[1] if path and len(path) > 1 else None
+        d = len(path) - 1 if path else 1 << 30
+        if not c.chasing and d <= PATROL_DETECT:
+            c.chasing = True
+        elif c.chasing and d > PATROL_LOSE:
+            c.chasing = False
+            c.widx = 0 if c.waypoints[0] != c.pos else 1  # 놓치면 가까운 순찰 지점부터 다시
+        if c.chasing:
+            return path[1] if path and len(path) > 1 else None
+        if c.pos == c.waypoints[c.widx]:
+            c.widx ^= 1
+        back = astar(self.grid, c.pos, c.waypoints[c.widx])
+        return back[1] if back and len(back) > 1 else None
 
     def resolve_collisions(self):
         """플레이어와 추격자가 같은 칸이면 잡힘(게임 오버). 게임이 끝났으면 True."""
@@ -236,13 +277,16 @@ class Game:
             return True
         return False
 
-    def spawn_chaser(self):
+    def spawn_chaser(self, role="hunter"):
         """처치된 추격자를 플레이어에게서 먼 곳(걸어서 20칸 이상, 가능하면 미로의 먼 쪽)에 다시 내보낸다."""
         dist = bfs_distances(self.grid, self.player.pos)
         far = max(dist.values())
         cands = [p for p, d in dist.items() if d >= max(20, 0.4 * far) and p != self.exit]
         pos = self.rng.choice(cands) if cands else max(dist, key=dist.get)
-        self.chasers.append(Mover(pos))
+        c = Mover(pos)
+        self.chasers.append(c)
+        if role == "patrol":
+            self.make_patrol(c)
 
     def update(self, dt, held_dir):
         """dt초 진행. held_dir은 이동을 시도할 방향 하나 또는 우선순위 목록 (없으면 None)."""
@@ -256,7 +300,8 @@ class Game:
             self.respawns[i] -= dt
             if self.respawns[i] <= 0:
                 del self.respawns[i]
-                self.spawn_chaser()
+                role = self.respawn_roles.pop(i) if i < len(self.respawn_roles) else "hunter"
+                self.spawn_chaser(role)
         for m in [self.player, *self.chasers]:
             m.t = min(1.0, m.t + dt / (self.player_step() if m is self.player else self.chaser_step))
 
@@ -294,9 +339,9 @@ class Game:
         while self.chaser_timer <= 0:
             self.chaser_timer += self.chaser_step
             for c in self.chasers:
-                path = astar(self.grid, c.pos, self.player.pos)
-                if path and len(path) > 1:
-                    c.move_to(path[1])
+                nxt = self.chaser_next_tile(c)
+                if nxt:
+                    c.move_to(nxt)
             if self.resolve_collisions():
                 return
 
@@ -345,7 +390,8 @@ class View:
 
         r = ts * 0.36
         for c in g.chasers:
-            pygame.draw.circle(s, CHASER_C, center(c.draw_pos()), r)
+            pygame.draw.circle(s, PATROL_C if c.role == "patrol" and not c.chasing else CHASER_C,
+                               center(c.draw_pos()), r)
         pc = center(g.player.draw_pos())
         pygame.draw.circle(s, PLAYER_C, pc, r)
         if g.state == "play" and g.ammo > 0:  # 화살을 들고 있으면 바라보는 쪽에 조준점 표시
