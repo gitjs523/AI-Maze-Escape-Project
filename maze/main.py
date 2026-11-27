@@ -6,7 +6,7 @@ import sys
 import pygame
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from logic import astar, bfs_distances, farthest_floor, generate_maze, is_floor
+from logic import astar, bfs_distances, farthest_floor, generate_maze, is_floor, safe_path_exists
 
 WIN_W, WIN_H = 960, 720
 HUD_H = 48
@@ -68,20 +68,33 @@ class Game:
         self.start_stage()
 
     def start_stage(self):
+        """미로와 추격자 위치를 만든다. 잘 달리면 반드시 클리어할 수 있는 판만 통과시킨다."""
         cw, ch, n_chasers, self.chaser_step = stage_params(self.stage)
-        self.grid = generate_maze(cw, ch, self.rng)
         start = (1, 1)
-        self.exit = farthest_floor(self.grid, start)
+        picks = []
+        for _ in range(60):  # 판 자체를 다시 만드는 횟수
+            self.grid = generate_maze(cw, ch, self.rng)
+            self.exit = farthest_floor(self.grid, start)
+            dist = bfs_distances(self.grid, start)
+            far = max(dist.values())
+            solution = set(astar(self.grid, start, self.exit))
+            # 시작점과 출구 사이 어딘가, 정답 길 위가 아닌 곳에서 출발
+            spots = [p for p in dist if p not in solution and 0.3 * far <= dist[p] <= 0.9 * far]
+            if len(spots) < n_chasers:
+                continue
+            for _ in range(40):  # 같은 미로에서 추격자 위치를 다시 뽑는 횟수
+                picks = self.rng.sample(spots, n_chasers)
+                if safe_path_exists(self.grid, start, self.exit, picks,
+                                    PLAYER_STEP, self.chaser_step, GRACE):
+                    break
+            else:
+                continue
+            break
+        if len(picks) != n_chasers:  # 거의 없는 경우의 대비책: 출구에서 먼 칸 중에서 고름
+            far_tiles = sorted((p for p in dist if p not in solution), key=lambda p: -dist[p])
+            picks = far_tiles[:n_chasers]
         self.player = Mover(start)
-        dist = bfs_distances(self.grid, start)
-        far = max(dist.values())
-        solution = set(astar(self.grid, start, self.exit))
-        self.chasers = []
-        for i in range(n_chasers):
-            target = far * (0.55 + 0.2 * i)  # 시작점과 출구 사이 중간쯤에서 출발
-            tile = min((p for p in dist if p not in solution),  # 정답 길 위에서는 시작하지 않음
-                       key=lambda p: abs(dist[p] - target))
-            self.chasers.append(Mover(tile))
+        self.chasers = [Mover(p) for p in picks]
         self.player_timer = 0.0
         self.chaser_timer = 0.0
         self.grace = GRACE

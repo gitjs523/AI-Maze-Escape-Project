@@ -5,8 +5,8 @@ import sys
 
 os.environ["SDL_VIDEODRIVER"] = "dummy"
 sys.path.insert(0, os.path.dirname(__file__))
-from main import Game, stage_params
-from logic import astar
+from main import Game, stage_params, PLAYER_STEP, GRACE
+from logic import astar, safe_path_exists
 
 
 def run(game, policy, limit=120.0, dt=1 / 60):
@@ -61,6 +61,30 @@ def test_runner_reaches_exit_or_is_caught_and_stage_advances():
             assert g.stage == 2 and g.state == "play"
     print(f"  (직진 로봇 1단계 탈출 {cleared}/40)")
     assert cleared > 0
+
+
+def test_every_stage_is_fair():
+    """1~10단계, 여러 판 모두에서 추격자보다 먼저 도착하는 안전한 길이 있어야 한다."""
+    bad = 0
+    total = 0
+    for stage in range(1, 11):
+        for seed in range(60):
+            g = Game(random.Random(seed * 7 + stage))
+            g.stage = stage
+            g.start_stage()
+            total += 1
+            if not safe_path_exists(g.grid, (1, 1), g.exit, [c.pos for c in g.chasers],
+                                    PLAYER_STEP, g.chaser_step, GRACE):
+                bad += 1
+    print(f"  (불공평한 판 {bad}/{total})")
+    assert bad == 0
+
+
+def test_safe_path_detects_blocked_corridor():
+    # 일직선 복도: 추격자가 출구 쪽에 서 있으면 안전한 길이 없다
+    g = [[1] * 12, [1] + [0] * 10 + [1], [1] * 12]
+    assert safe_path_exists(g, (1, 1), (10, 1), [(5, 1)], 0.11, 0.3, 2.0) is False
+    assert safe_path_exists(g, (1, 1), (10, 1), [(10, 1)], 0.11, 0.3, 2.0) is False
 
 
 def test_restart_resets():

@@ -116,3 +116,38 @@ def farthest_floor(grid, origin):
     """origin에서 걸어서 가장 먼 길 칸. 출구 위치를 정할 때 쓴다."""
     dist = bfs_distances(grid, origin)
     return max(dist, key=dist.get)
+
+
+def safe_path_exists(grid, start, goal, chaser_positions, player_step, chaser_step, grace, margin=2):
+    """출구까지 '모든 칸에 추격자보다 margin칸 이상 먼저 도착'하는 길이 있는가.
+
+    추격자는 grace초 뒤 출발해서 칸당 chaser_step초로 최단 경로를 따라온다고 보고,
+    플레이어는 칸당 player_step초로 달린다고 본다. 이 조건을 만족하면 가만히 달리기만 해도
+    클리어할 수 있으므로 '공평한 판'으로 쓸 수 있다.
+    """
+    from collections import deque
+
+    dists = [bfs_distances(grid, c) for c in chaser_positions]
+
+    blocked = set(chaser_positions)  # 출발 대기 중에도 추격자는 그 칸에 서 있다 (닿으면 잡힘)
+
+    def ok(node, steps):
+        if node in blocked:
+            return False
+        t = steps * player_step
+        return all(t + margin * chaser_step < grace + (d.get(node, 1 << 30) - 1) * chaser_step
+                   for d in dists)
+
+    if not ok(start, 0):
+        return False
+    seen = {start: 0}
+    queue = deque([start])
+    while queue:
+        cur = queue.popleft()
+        if cur == goal:
+            return True
+        for nxt in neighbors(grid, cur):
+            if nxt not in seen and ok(nxt, seen[cur] + 1):
+                seen[nxt] = seen[cur] + 1
+                queue.append(nxt)
+    return False
